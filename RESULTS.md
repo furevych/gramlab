@@ -1,5 +1,7 @@
 # Results log
 
+Earlier status doc (Nov 7): https://claude.ai/artifact/GuUe9ayUsbRyyvq26DhrrP
+
 ## Run 1 — overnight, 2026-11-08 (Kaggle T4, 4.72 h, `kaggle_overnight.ipynb`, saved as Version 1)
 
 Data: Simple English Wikipedia 149,547 articles (44M words) + English Wikipedia 120,000 articles (114M words)
@@ -45,6 +47,7 @@ toward chunk structure, or distillation from a syntactic model), with 3 seeds.
 
 | model | perplexity on gold GUM | bits/byte | tokens seen |
 |-------|-----------------------:|----------:|------------:|
+| CPU n-gram model (run 0, grammstat) | — | 1.91 | AMALGUM |
 | 3M (`tiny`)        | 135.8 | 1.68 | 33M (9 epochs of AMALGUM) |
 | 25M (`small_wiki`) | 68.5 (step 4000) | 1.45 | 158M (0.7 epochs of the mix) |
 
