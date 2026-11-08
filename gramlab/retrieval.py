@@ -3,6 +3,12 @@ passage instead of from (non-existent) memorised facts.
 
   python -m gramlab.retrieval build  --wiki data/simplewiki.jsonl --wiki data/enwiki.jsonl --out work/bm25
   python -m gramlab.retrieval search --index work/bm25 --q "Tell me about Belgrade." -k 3
+  python -m gramlab.retrieval eval   --index work/bm25 --wiki data/simplewiki.jsonl --n 2000 --out results/retrieval_bm25.json
+
+`eval` is the retrieval scoreboard: recall@k over two kinds of query with a known gold article —
+"title" queries ("Tell me about <title>.") and "body" queries (a sentence from the article *below* the indexed
+lead paragraph, so the words differ from the passage). It saves the query set (work/bm25/eval_queries.jsonl) so a
+dense teacher baseline (scripts/teacher_embed.py) and later the grammar meaning map are scored on identical queries.
 
 Index = one passage per article (its lead paragraph, cut to --max_words words at a sentence boundary),
 scored with BM25 (k1=1.5, b=0.75) and the title counted twice. Stored as a scipy CSC matrix of
@@ -13,7 +19,7 @@ The retrieval-conditioned chat format (shared by scripts/make_rag_qa.py, finetun
     Context: <title>: <passage>
     Question: <user question>
 """
-import argparse, array, json, math, os, re, sys, time, unicodedata
+import argparse, array, json, math, os, random, re, sys, time, unicodedata
 import numpy as np
 import scipy.sparse as sp
 
@@ -68,6 +74,59 @@ def iter_wiki_passages(path, max_words=100, per_doc=1, min_words=20):
                 n += 1
                 if n >= per_doc:
                     break
+
+
+def clean_title(title: str) -> str:
+    return re.sub(r"\s*\([^)]*\)\s*$", "", title).strip()
+
+
+EVAL_TEMPLATES = ["Tell me about {t}.", "What is {t}?", "What do you know about {t}?", "{t}"]
+
+
+def make_eval_queries(wiki_paths, n=2000, seed=7, min_words=20):
+    """n queries with a known gold article: half "title", half "body" (a sentence from a later paragraph)."""
+    rng = random.Random(seed)
+    cands = []
+    for path in wiki_paths:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                paras = [p.strip() for p in r["text"].split("\n") if len(p.split()) >= min_words]
+                if len(paras) >= 2 and "may refer to" not in paras[0][:200]:
+                    cands.append((r["title"], paras[1]))
+    rng.shuffle(cands)
+    out = []
+    for title, para in cands:
+        if len(out) >= n:
+            break
+        t = clean_title(title)
+        if not t:
+            continue
+        if len(out) % 2 == 0:
+            out.append({"kind": "title", "query": rng.choice(EVAL_TEMPLATES).format(t=t), "gold": t})
+        else:
+            sents = [x for x in re.split(r"(?<=[.!?])\s+", para) if 8 <= len(x.split()) <= 30]
+            if not sents:
+                continue
+            out.append({"kind": "body", "query": sents[0], "gold": t})
+    return out
+
+
+def recall_at_k(search_titles, queries, ks=(1, 5, 10)):
+    """search_titles(query, k) -> list of titles. Returns recall@k overall and per query kind."""
+    kmax = max(ks)
+    hits = {kind: {k: 0 for k in ks} for kind in ("title", "body", "all")}
+    counts = {"title": 0, "body": 0, "all": 0}
+    for q in queries:
+        titles = [clean_title(t).lower() for t in search_titles(q["query"], kmax)]
+        gold = q["gold"].lower()
+        rank = titles.index(gold) + 1 if gold in titles else None
+        for kind in (q["kind"], "all"):
+            counts[kind] += 1
+            for k in ks:
+                hits[kind][k] += int(rank is not None and rank <= k)
+    return {kind: {f"recall@{k}": round(hits[kind][k] / max(counts[kind], 1), 4) for k in ks} | {"n": counts[kind]}
+            for kind in hits}
 
 
 def format_rag_user(passages, question: str) -> str:
@@ -192,7 +251,31 @@ def main(argv=None):
     s.add_argument("--index", required=True)
     s.add_argument("--q", required=True)
     s.add_argument("-k", type=int, default=3)
+    e = sub.add_parser("eval")
+    e.add_argument("--index", required=True)
+    e.add_argument("--wiki", action="append", required=True, help="articles to draw gold queries from (repeatable)")
+    e.add_argument("--n", type=int, default=2000)
+    e.add_argument("--out", default=None, help="write the scoreboard JSON here")
+    e.add_argument("--queries", default=None, help="reuse / save the query set (default <index>/eval_queries.jsonl)")
     args = ap.parse_args(argv)
+    if args.cmd == "eval":
+        idx = BM25Index.load(args.index)
+        qpath = args.queries or os.path.join(args.index, "eval_queries.jsonl")
+        if os.path.exists(qpath):
+            queries = [json.loads(l) for l in open(qpath, encoding="utf-8")]
+        else:
+            queries = make_eval_queries(args.wiki, args.n)
+            with open(qpath, "w", encoding="utf-8") as fh:
+                for q in queries:
+                    fh.write(json.dumps(q, ensure_ascii=False) + "\n")
+        t0 = time.time()
+        res = recall_at_k(lambda q, k: [idx.titles[i] for _, i in idx.search(q, k)], queries)
+        res["system"] = "bm25"; res["ms_per_query"] = round(1000 * (time.time() - t0) / max(len(queries), 1), 2)
+        print(json.dumps(res, indent=1))
+        if args.out:
+            os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+            json.dump(res, open(args.out, "w"), indent=1)
+        return
     if args.cmd == "build":
         def pairs():
             n = 0

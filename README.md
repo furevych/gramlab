@@ -107,21 +107,32 @@ Then: `python -m gramlab.prepare --config configs/tiny.json --corpus <name>`. Ex
   by keeping `retrieve(question, k, max_words) -> [{"title","text","score"}]`. The chat format lives in
   `format_rag_user()` and is shared by `scripts/make_rag_qa.py`, `finetune.py` and `chat.py`.
 
-## 6. Unattended run (Kaggle "Save & Run All")
-`kaggle_overnight.ipynb` does everything in one background job (≈4–5 h on a T4): baseline vs grammar-heads
-(bits/byte + BLiMP), fetches Simple English Wikipedia + 120k English Wikipedia articles with
-`scripts/fetch_wikipedia.py`, trains `configs/small_wiki.json` (≈25M params, time-guarded by `train.max_hours`),
-fine-tunes on the Q&A set, prints sample answers, and trims the output. T4s have no bf16, so training uses fp16 autocast.
+## 6. Unattended runs (Kaggle "Save & Run All")
+Run 1 (`kaggle_overnight.ipynb`, now only in git history; its output is Kaggle Version 1) trained the 3M baseline vs
+grammar heads, fetched the Wikipedia corpus and trained the 25M `small_wiki` for 0.7 epochs. Results and the reading
+are in **RESULTS.md**.
 
-`kaggle_continue.ipynb` picks up where that run stopped: attach the overnight notebook's output as an input and it
-copies the shards + checkpoints, continues `small_wiki` for 8000 more steps in fp16 (3 h guard), builds the BM25 index,
-fine-tunes `small_wiki_rag` on 30k retrieval-conditioned dialogues (plus `small_wiki_sft` on plain Q&A for comparison),
-evaluates per-POS loss + BLiMP for `tiny` / `tiny_upos` / `small_wiki`, draws `results/per_pos_loss.png`, and answers
-the same questions with and without retrieval. Without an attached output it rebuilds everything from scratch.
-Knobs in its first cell: `QUICK = True` runs every stage in ~45 min (300 steps, 5k dialogues, short evals) — do that once
-before a full job; `TRAIN_HOURS` caps the continued training. Kaggle quota: ~30 GPU-hours/week shared by P100 and T4 x2,
-12 h per session; the full job (14000 more steps, 4 h training budget) costs ≈5–5.5 GPU-hours (≈2 GB of output), the quick one ≈0.75. Launch with *Save & Run All*
-rather than an interactive session — an open interactive GPU session counts against the quota even when idle.
+`kaggle_continue.ipynb` is stage 2. Attach Version 1 as input; it copies only the tokenizer/shards and checkpoints,
+finishes the 25M writer in fp16 (`MORE_STEPS`, schedule fitted to `TRAIN_HOURS`), builds the BM25 index and the
+retrieval scoreboard, fine-tunes `small_wiki_rag` (retrieval-conditioned) and `small_wiki_sft` (plain, for comparison),
+computes teacher embeddings for the map stage, draws the per-POS loss chart and prints answers with and without
+retrieval. Set `QUICK = True` once first (~45 min). Full job ≈5–5.5 GPU-hours of the weekly ~30; output ≈3 GB, kept as
+the base for later runs (raw text included). Launch with *Save & Run All*, not an interactive session (idle GPU
+sessions count against the quota).
+
+## 6b. Roadmap (from the design discussion; GPU = Kaggle T4 hours)
+| stage | what | GPU | status |
+|---|---|---|---|
+| writer | 25M model, ~3 epochs of 217M clean tokens, fp16 | ~5 h | stage 2 |
+| retrieval baseline | BM25 over Wikipedia leads; retrieval-conditioned Q&A fine-tune; scoreboard (recall@k) | 0.5 h | stage 2 |
+| map + index | teacher embeddings (stage 2) → regress 32-dim grammar-slot codes from chunked sentences (CPU) → index; STS-B test; beat BM25 on the scoreboard | 0 | next |
+| intent scorer | power-word lexicon + POS → logistic regression | 0 | next |
+| single-hop reasoning | ~10k step-by-step traces from an open teacher, fine-tune the writer | 10–20 h or API | later |
+| two-hop | swap the writer for a ~1B open model (LoRA, 4-bit) in an iterative retrieve-think loop | 6–10 h | later |
+
+Knowledge scales with disk (add text, re-index), fluency with GPU-hours (25M floor; 100–350M comfortable), the map by
+regression against a stronger teacher (32 → 128 dims when collisions matter). Grammar heads are **parked**
+(`configs/tiny_upos.json` stays as the record); a stronger variant, if any, gets 3 seeds.
 
 ## 7. Experiment protocol that this is built for
 Same data, same tokenizer, same size; 3 seeds; report `eval_bits_per_byte` and BLiMP at 250k / 1M / 3.5M tokens:
@@ -131,7 +142,7 @@ If 2 beats 1 at ≤1M tokens by more than the seed spread, grammar earns its kee
 ## Layout
 ```
 corpora.json            data registry (edit to add data)
-configs/                tiny.json, tiny_upos.json, small.json
+configs/                tiny.json, tiny_upos.json (parked), small_wiki.json
 gramlab/
   data/conllu.py        CoNLL-U reader          data/chunker.py   UD tree → NP/VP/PP/... chunks
   data/registry.py      loaders per corpus type
@@ -147,6 +158,8 @@ gramlab/
 scripts/make_wiki_qa.py synthetic Q&A from AMALGUM for the first fine-tune
 scripts/make_rag_qa.py  retrieval-conditioned Q&A (gold / gold+near-miss / miss) from the Wikipedia dumps
 scripts/plot_pos_loss.py per-POS loss chart from evaluate --per_pos results
-kaggle_overnight.ipynb  first unattended run      kaggle_continue.ipynb  continues from its output
+scripts/teacher_embed.py teacher embeddings (map targets), dense retrieval baseline, STS-B pairs
+kaggle_continue.ipynb   stage-2 unattended run (continues from Kaggle Version 1)
+RESULTS.md              findings per run and the decisions they caused
 data/wiki_qa.jsonl      1,624 generated dialogues (included)
 ```
