@@ -72,7 +72,13 @@ Then: `python -m gramlab.prepare --config configs/tiny.json --corpus <name>`. Ex
 - **Output layer / attention / positional scheme**: `model.py` is 120 lines; swap `self.head` or `Block`.
 - **Evaluation**: `evaluate.py` — add a metric function next to `blimp()`.
 
-## 6. Experiment protocol that this is built for
+## 6. Unattended run (Kaggle "Save & Run All")
+`kaggle_overnight.ipynb` does everything in one background job (≈4–5 h on a T4): baseline vs grammar-heads
+(bits/byte + BLiMP), fetches Simple English Wikipedia + 120k English Wikipedia articles with
+`scripts/fetch_wikipedia.py`, trains `configs/small_wiki.json` (≈25M params, time-guarded by `train.max_hours`),
+fine-tunes on the Q&A set, prints sample answers, and trims the output. T4s have no bf16, so training uses fp16 autocast.
+
+## 7. Experiment protocol that this is built for
 Same data, same tokenizer, same size; 3 seeds; report `eval_bits_per_byte` and BLiMP at 250k / 1M / 3.5M tokens:
 1. `tiny` (baseline)  2. `tiny_upos` (grammar heads)  3. student distilled from each.
 If 2 beats 1 at ≤1M tokens by more than the seed spread, grammar earns its keep at zero inference cost.

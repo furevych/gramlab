@@ -86,6 +86,9 @@ def main(argv=None):
     tr, mc = cfg["train"], cfg["model"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
+    use_fp16 = device == "cuda" and not use_bf16            # T4/V100: fp16 tensor cores + loss scaling
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
     torch.manual_seed(tr["seed"]); rng = np.random.default_rng(tr["seed"])
     tok_dir = tokenizer_dir(cfg)
     tok = load_tokenizer(tok_dir)
@@ -119,20 +122,25 @@ def main(argv=None):
         print(f"[train] distilling from {tr['distill']['teacher']} ({teacher.n_params()/1e6:.1f}M non-emb params)")
 
     print(f"[train] {cfg['run_name']}: {model.n_params()/1e6:.2f}M non-embedding params (+{model.tok.weight.numel()/1e6:.2f}M embedding), "
-          f"vocab {len(tok)}, train tokens {train_sh.n_tokens:,}, device {device}, bf16 {use_bf16}")
+          f"vocab {len(tok)}, train tokens {train_sh.n_tokens:,}, device {device}, precision "
+          f"{'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}")
     log = open(os.path.join(rd, "log.jsonl"), "a")
     json.dump(cfg, open(os.path.join(rd, "config.json"), "w"), indent=1)
     model.train()
     t0 = time.time()
     B, T = tr["batch"], mc["ctx"]
+    max_hours = float(tr.get("max_hours", 0) or 0)
     while step < tr["steps"]:
+        if max_hours and (time.time() - t0) > max_hours * 3600:
+            print(f"[train] time guard: {max_hours}h reached at step {step}; stopping early", flush=True)
+            tr["steps"] = step                                  # final eval + checkpoint below
         for g in opt.param_groups:
             g["lr"] = lr_at(step, tr)
         opt.zero_grad(set_to_none=True)
         tot_lm = 0.0
         for _ in range(tr["accum"]):
             x, y, tags = train_sh.batch(B, T, rng, device)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_bf16):
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=(use_bf16 or use_fp16)):
                 logits, h = model(x)
                 loss_lm = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
                 loss = loss_lm
@@ -146,10 +154,12 @@ def main(argv=None):
                                   reduction="batchmean") * (Tt * Tt) / T
                     w = tr["distill"]["weight"]
                     loss = (1 - w) * loss + w * kd
-            (loss / tr["accum"]).backward()
+            scaler.scale(loss / tr["accum"]).backward()
             tot_lm += loss_lm.item() / tr["accum"]
+        scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(model.parameters(), tr["grad_clip"])
-        opt.step()
+        scaler.step(opt)
+        scaler.update()
         step += 1
         if step % 50 == 0:
             print(f"step {step} lm_loss {tot_lm:.3f} lr {lr_at(step, tr):.2e} {(time.time()-t0)/step:.2f}s/step", flush=True)

@@ -1,0 +1,42 @@
+{
+  "run_name": "small_wiki",
+  "tokenizer": {
+    "type": "auto",
+    "vocab_size": 16000
+  },
+  "train_corpora": [
+    {
+      "name": "enwiki",
+      "weight": 1.0
+    },
+    {
+      "name": "simplewiki",
+      "weight": 1.0
+    },
+    {
+      "name": "amalgum",
+      "weight": 1.0
+    }
+  ],
+  "eval_corpus": "gum_test",
+  "model": {
+    "d_model": 512,
+    "n_layer": 8,
+    "n_head": 8,
+    "ctx": 256,
+    "dropout": 0.1,
+    "aux_heads": [],
+    "aux_weight": 0.3
+  },
+  "train": {
+    "batch": 32,
+    "accum": 4,
+    "steps": 8000,
+    "lr": 0.0004,
+    "warmup": 400,
+    "eval_every": 1000,
+    "eval_tokens": 300000,
+    "seed": 1,
+    "max_hours": 4.0
+  }
+}

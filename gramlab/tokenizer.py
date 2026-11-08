@@ -106,6 +106,9 @@ class BPETokenizer:
     def encode(self, text: str) -> List[int]:
         return self.tok.encode(text).ids
 
+    def encode_batch(self, texts: List[str]) -> List[List[int]]:
+        return [e.ids for e in self.tok.encode_batch(texts)]
+
     def decode(self, ids: List[int]) -> str:
         return self.tok.decode([i for i in ids if i not in (PAD, EOS, USER, ASSISTANT, END)]).strip()
 

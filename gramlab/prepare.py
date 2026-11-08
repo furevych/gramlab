@@ -39,6 +39,19 @@ def prepare_corpus(name, cfg, registry, tok, force=False):
         buf_t, buf_u, buf_c = [], [], []
         for doc in iter_docs(name, registry):
             n_docs += 1
+            untagged = doc and all(not s.get("upos") for s in doc)
+            if untagged and hasattr(tok, "encode_batch"):
+                # fast path for plain text: one Rust batch call per document, no tag alignment needed
+                texts = [" ".join(s["forms"]) for s in doc]
+                for words, ids in zip((s["forms"] for s in doc), tok.encode_batch(texts)):
+                    buf_t.extend(ids); buf_t.append(EOS)
+                    buf_u.extend([NO_TAG] * (len(ids) + 1)); buf_c.extend([NO_TAG] * (len(ids) + 1))
+                    n_tok += len(ids) + 1; n_words += len(words)
+                    n_bytes += len(" ".join(words).encode("utf-8")) + 1
+                if len(buf_t) > 1_000_000:
+                    np.asarray(buf_t, dtype=dtype).tofile(ft); np.asarray(buf_u, dtype=np.uint8).tofile(fu)
+                    np.asarray(buf_c, dtype=np.uint8).tofile(fc); buf_t, buf_u, buf_c = [], [], []
+                continue
             for s in doc:
                 words = s["forms"]
                 ids, widx = tok.encode_words(words)
