@@ -2,6 +2,32 @@
 
 Earlier status doc (Nov 7): https://claude.ai/artifact/GuUe9ayUsbRyyvq26DhrrP
 
+## Run 0 — CPU, grammstat (before gramlab): what the n-gram experiments established
+
+AMALGUM (3.5M tokens, silver UD parses) for training, GUM gold for eval; Kneser-Ney trigrams.
+
+1. **The chunk extractor is sound**: gold vs silver chunk inventories agree within half a point (NP 50.4% vs 50.9% of
+   tokens, VP 16.2% vs 16.2%, PP 9.7% vs 9.7%). Parsing Wikipedia with Stanza and computing grammar statistics is safe.
+2. **A grammar class as one extra integer per word helps, most at small data**: word trigram + POS-class trigram
+   gives −13.6% perplexity at 100k training tokens and −8.0% at 3.5M (the class model at 100k matches a word model
+   trained on 1.7× the text; at 3.5M the multiplier is 1.36×). Class tables add 3% to model size.
+3. **Grammar chunks as vocabulary units lose**, even with oracle segmentation: 1M NP occurrences spread over 330k
+   distinct strings; 10k types cover 53% of NP tokens vs 91% for words. Bits/byte: words 1.91, frequency-merged
+   superwords 2.07, grammar chunks 3.18. Chunk segmentation generalises to new text (55.6 units/100 words on train
+   and test) while the frequency merge table overfits (55.5 → 64.2).
+4. **Chunk tags add nothing beyond POS** as prediction classes (chunk×UPOS ≈ UPOS). Chunks are for segmentation
+   and interpretability.
+5. **Power words are ambiguous without grammar, and POS fixes most of it**: in the corpus *strike* is a noun 69% of
+   the time, *hate* 52% (hate speech), *love* 54%, *attack* 86%, *fire* 96%. Lexicon + POS + chunk type is still cheap;
+   negation and sarcasm remain for a small classifier.
+
+Design rules taken from the literature review in the same session: perplexity does not show what grammar buys
+(Hu et al. 2020), so judge grammar work on BLiMP/SyntaxGym and on **sample efficiency**; the reliable way to make
+syntax pay at zero inference cost is **distillation from a syntax-aware teacher** (Kuncoro et al. 2019) or a
+train-time-only structural loss (tree-planted attention); never put a parser in the inference path; synonym
+**indexes are lookup keys, sums of indexes impose a fake ordering** — the meaning map's slot codes are therefore
+small learned vectors summed per slot, not integers; clean data is the largest lever (FineWeb-Edu: 10× fewer tokens).
+
 ## Run 1 — overnight, 2026-11-08 (Kaggle T4, 4.72 h, `kaggle_overnight.ipynb`, saved as Version 1)
 
 Data: Simple English Wikipedia 149,547 articles (44M words) + English Wikipedia 120,000 articles (114M words)
@@ -40,7 +66,10 @@ Null. Per-phenomenon swings (+0.24 wh-islands, −0.14 irregular participles) ar
 seed. Predicting the next token's tag from the same hidden state that predicts the next token adds almost nothing
 the LM objective does not already carry. Caveat: the comparison was made after 9 epochs; the hypothesis was *data
 efficiency*, so the honest check is bits/byte at steps 250–1,000 in `work/runs/tiny*/log.jsonl` (2–8M tokens).
-**Decision: parked.** If grammar supervision is tried again it will be a stronger form (supervising attention
+This is consistent with run 0's curve, not a contradiction of it: the class gain was already down to −8% at 3.5M
+tokens, so after 33M it could only be null. The planned test — 3 arms × 3 seeds at 250k / 1M / 4M tokens — was never
+run; stage 2 runs it (`scripts/sweep_arms.py`). **Decision: parked unless the sweep shows a gain at ≤1M tokens.**
+If grammar supervision is tried again beyond that, it will be a stronger form (supervising attention
 toward chunk structure, or distillation from a syntactic model), with 3 seeds.
 
 ### Experiment C — 25M model on the Wikipedia mix

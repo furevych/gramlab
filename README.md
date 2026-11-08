@@ -116,13 +116,14 @@ are in **RESULTS.md**.
 finishes the 25M writer in fp16 (`MORE_STEPS`, schedule fitted to `TRAIN_HOURS`), builds the BM25 index and the
 retrieval scoreboard, fine-tunes `small_wiki_rag` (retrieval-conditioned) and `small_wiki_sft` (plain, for comparison),
 computes teacher embeddings for the map stage, draws the per-POS loss chart and prints answers with and without
-retrieval. Set `QUICK = True` once first (~45 min). Full job ≈5–5.5 GPU-hours of the weekly ~30; output ≈3 GB, kept as
+retrieval. Set `QUICK = True` once first (~45 min). Full job ≈6 GPU-hours (≈5.3 without the sweep) of the weekly ~30; output ≈3 GB, kept as
 the base for later runs (raw text included). Launch with *Save & Run All*, not an interactive session (idle GPU
 sessions count against the quota).
 
 ## 6b. Roadmap (from the design discussion; GPU = Kaggle T4 hours)
 | stage | what | GPU | status |
 |---|---|---|---|
+| grammar-heads sample-efficiency test | 3 arms × 3 seeds at 250k/1M/4M tokens, bits/byte + BLiMP (`scripts/sweep_arms.py`) | 0.75 h | stage 2 |
 | writer | 25M model, ~3 epochs of 217M clean tokens, fp16 | ~5 h | stage 2 |
 | retrieval baseline | BM25 over Wikipedia leads; retrieval-conditioned Q&A fine-tune; scoreboard (recall@k) | 0.5 h | stage 2 |
 | map + index | teacher embeddings (stage 2) → regress 32-dim grammar-slot codes from chunked sentences (CPU) → index; STS-B test; beat BM25 on the scoreboard | 0 | next |
@@ -158,6 +159,7 @@ gramlab/
 scripts/make_wiki_qa.py synthetic Q&A from AMALGUM for the first fine-tune
 scripts/make_rag_qa.py  retrieval-conditioned Q&A (gold / gold+near-miss / miss) from the Wikipedia dumps
 scripts/plot_pos_loss.py per-POS loss chart from evaluate --per_pos results
+scripts/sweep_arms.py    baseline vs grammar heads at small data, several seeds (sample-efficiency curve)
 scripts/teacher_embed.py teacher embeddings (map targets), dense retrieval baseline, STS-B pairs
 kaggle_continue.ipynb   stage-2 unattended run (continues from Kaggle Version 1)
 RESULTS.md              findings per run and the decisions they caused
