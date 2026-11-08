@@ -2,8 +2,9 @@
 
   python -m gramlab.train --config configs/tiny.json
   python -m gramlab.train --config configs/tiny.json --resume                 # continue the same run (optimizer + fp16 scaler state)
-  python -m gramlab.train --config configs/small_wiki.json --resume --more_steps 8000 --set train.lr=3e-4
-                                                                              # continue a finished / time-guarded run for 8000 more steps
+  python -m gramlab.train --config configs/small_wiki.json --resume --more_steps 14000 --set train.lr=3e-4 --set train.max_hours=4
+                                                                              # continue a finished / time-guarded run; with max_hours the
+                                                                              # cosine is fitted to the time budget after 200 measured steps
   python -m gramlab.train --config configs/tiny_plus.json --init_from work/runs/tiny/ckpt.pt   # new data / new corpora mix
   python -m gramlab.train --config configs/tiny_upos.json                     # aux_heads ["upos"]
   python -m gramlab.train --config configs/student.json --set train.distill.teacher=work/runs/teacher/ckpt.pt
@@ -148,10 +149,18 @@ def main(argv=None):
     t0, step0 = time.time(), step
     B, T = tr["batch"], mc["ctx"]
     max_hours = float(tr.get("max_hours", 0) or 0)
+    fit_at = step0 + int(tr.get("fit_after", 200))             # measure speed, then fit the schedule into the time budget
     while step < tr["steps"]:
         if max_hours and (time.time() - t0) > max_hours * 3600:
             print(f"[train] time guard: {max_hours}h reached at step {step}; stopping early", flush=True)
             tr["steps"] = step                                  # final eval + checkpoint below
+        if max_hours and step == fit_at and tr.get("fit_to_time", True):
+            per_step = (time.time() - t0) / max(1, step - step0)
+            feasible = step0 + int(max_hours * 3600 * 0.95 / per_step)
+            if feasible < tr["steps"]:                          # cosine re-spans so the lr still anneals by the guard
+                print(f"[train] {per_step:.2f}s/step -> only {feasible - step0} steps fit in {max_hours}h; "
+                      f"schedule shortened from {tr['steps']} to {feasible} total steps", flush=True)
+                tr["steps"] = max(feasible, step + 1)
         for g in opt.param_groups:
             g["lr"] = lr_at(step, tr, rewarm)
         opt.zero_grad(set_to_none=True)

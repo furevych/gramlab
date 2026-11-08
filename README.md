@@ -77,7 +77,10 @@ miss produces an admission instead of an invention. `chat.py --retrieve work/bm2
   (strict=False loading, so you can add or drop aux heads when continuing). `--resume` continues the
   *same* run with its optimizer state (and fp16 loss scale); add `--more_steps 8000 --set train.lr=3e-4` to
   extend a finished or time-guarded run: the cosine schedule is re-spanned to the new total and re-warmed over
-  `train.warmup` steps so the learning rate does not jump.
+  `train.warmup` steps so the learning rate does not jump. With `train.max_hours` set, the trainer measures s/step
+  after 200 steps and shortens the schedule to what fits, so the lr anneals before the guard instead of being cut off.
+- Decoding: `generate()` applies a repetition penalty and bans any already-seen n-gram (`no_repeat_ngram=3`,
+  `chat.py --no_repeat`), which ends the "Tokyo, Japan, Japan, Japan" loops.
 - Precision is picked automatically (`gramlab/amp.py`): bf16 on Ampere+ GPUs, fp16 + dynamic loss scaling on
   T4/V100/P100 (bf16 is only emulated there), fp32 on CPU. Same in `finetune.py`.
 
@@ -117,7 +120,7 @@ evaluates per-POS loss + BLiMP for `tiny` / `tiny_upos` / `small_wiki`, draws `r
 the same questions with and without retrieval. Without an attached output it rebuilds everything from scratch.
 Knobs in its first cell: `QUICK = True` runs every stage in ~45 min (300 steps, 5k dialogues, short evals) — do that once
 before a full job; `TRAIN_HOURS` caps the continued training. Kaggle quota: ~30 GPU-hours/week shared by P100 and T4 x2,
-12 h per session; the full job costs ≈3–4.5 GPU-hours (≈2 GB of output), the quick one ≈0.75. Launch with *Save & Run All*
+12 h per session; the full job (14000 more steps, 4 h training budget) costs ≈5–5.5 GPU-hours (≈2 GB of output), the quick one ≈0.75. Launch with *Save & Run All*
 rather than an interactive session — an open interactive GPU session counts against the quota even when idle.
 
 ## 7. Experiment protocol that this is built for

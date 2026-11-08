@@ -75,7 +75,9 @@ class GPT(nn.Module):
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens=100, temperature=0.8, top_k=40, top_p=0.95,
-                 repetition_penalty=1.2, stop_ids=()):
+                 repetition_penalty=1.2, no_repeat_ngram=3, stop_ids=()):
+        """Sampling with a repetition penalty on every token already in the window and a hard ban on repeating
+        any n-gram already present (no_repeat_ngram=3 stops the "Tokyo, Japan, Japan, Japan" loops; 0 disables)."""
         self.eval()
         for _ in range(max_new_tokens):
             logits, _ = self(idx[:, -self.ctx:])
@@ -85,6 +87,14 @@ class GPT(nn.Module):
                     seen = torch.unique(idx[b])
                     logits[b, seen] = torch.where(logits[b, seen] > 0, logits[b, seen] / repetition_penalty,
                                                   logits[b, seen] * repetition_penalty)
+            if no_repeat_ngram and idx.size(1) >= no_repeat_ngram:
+                n = no_repeat_ngram
+                for b in range(idx.size(0)):
+                    seq = idx[b].tolist()
+                    prefix = tuple(seq[-(n - 1):])
+                    banned = [seq[i + n - 1] for i in range(len(seq) - n + 1) if tuple(seq[i:i + n - 1]) == prefix]
+                    if banned:
+                        logits[b, banned] = float("-inf")
             logits = logits / max(temperature, 1e-5)
             if top_k:
                 kth = torch.topk(logits, min(top_k, logits.size(-1))).values[:, -1, None]

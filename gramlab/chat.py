@@ -7,7 +7,7 @@
 
 With --retrieve, every question is first sent to the BM25 index (gramlab.retrieval) and the top
 passage(s) are put in front of it in the format the model was fine-tuned on (scripts/make_rag_qa.py).
-Sampling knobs: --temperature --top_k --top_p --rep (repetition penalty) --max_new
+Sampling knobs: --temperature --top_k --top_p --rep (repetition penalty) --no_repeat (n-gram ban) --max_new
 """
 import argparse
 import torch
@@ -36,6 +36,7 @@ def main(argv=None):
     ap.add_argument("--top_k", type=int, default=40)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--rep", type=float, default=1.2)
+    ap.add_argument("--no_repeat", type=int, default=3, help="ban repeating any n-gram of this size already in the text (0 = off)")
     ap.add_argument("--max_new", type=int, default=80)
     ap.add_argument("--history", type=int, default=4, help="chat turns kept as context (0 with retrieval: the passage needs the room)")
     args = ap.parse_args(argv)
@@ -73,7 +74,7 @@ def main(argv=None):
             stop = ()
         x = torch.tensor([ids[-(model.ctx - 1):]], dtype=torch.long, device=device)
         out = model.generate(x, max_new_tokens=args.max_new, temperature=args.temperature, top_k=args.top_k,
-                             top_p=args.top_p, repetition_penalty=args.rep, stop_ids=stop)
+                             top_p=args.top_p, repetition_penalty=args.rep, no_repeat_ngram=args.no_repeat, stop_ids=stop)
         new = out[0, x.size(1):].tolist()
         return tok.decode(new)
 
