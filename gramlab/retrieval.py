@@ -206,12 +206,28 @@ class BM25Index:
         return cls(W, {t: i for i, t in enumerate(terms)}, titles, offsets, os.path.join(d, "passages.jsonl"), meta)
 
     # ---------------------------------------------------------------- query
+    def _title_key(self, title):
+        return tuple(sorted(set(analyze(clean_title(title)))))
+
+    def title_matches(self, query: str):
+        """Passages whose title has exactly the query's content words ("Tell me about Belgrade." -> "Belgrade"),
+        so an article about the thing itself outranks articles that merely mention it often."""
+        if getattr(self, "_title_index", None) is None:
+            self._title_index = {}
+            for i, t in enumerate(self.titles):
+                self._title_index.setdefault(self._title_key(t), []).append(i)
+        return self._title_index.get(tuple(sorted(set(analyze(query)))), [])
+
     def search(self, query: str, k=5, exclude=()):
-        """-> list of (score, passage_index), best first; empty if no query term is in the index."""
+        """-> list of (score, passage_index), best first; empty if no query term is in the index.
+        Exact title matches are put first (their BM25 score + a bonus above the best other score)."""
         ids = sorted({self.vocab[t] for t in analyze(query) if t in self.vocab})
         if not ids:
             return []
         scores = np.asarray(self.W[:, ids].sum(axis=1)).ravel()
+        exact = self.title_matches(query)
+        if exact:
+            scores[exact] += float(scores.max()) + 1.0
         for e in exclude:
             scores[e] = 0.0
         kk = min(k, len(scores))
