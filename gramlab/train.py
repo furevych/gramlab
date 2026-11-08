@@ -85,7 +85,10 @@ def main(argv=None):
     cfg = load_config(args.config, args.set)
     tr, mc = cfg["train"], cfg["model"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
+    try:                                                    # real bf16 hardware only (Ampere+); T4 emulates bf16 slowly
+        use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported(including_emulation=False)
+    except TypeError:
+        use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
     use_fp16 = device == "cuda" and not use_bf16            # T4/V100: fp16 tensor cores + loss scaling
     amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
     scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
