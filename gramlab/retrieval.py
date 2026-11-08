@@ -218,14 +218,29 @@ class BM25Index:
                 self._title_index.setdefault(self._title_key(t), []).append(i)
         return self._title_index.get(tuple(sorted(set(analyze(query)))), [])
 
+    def correct(self, term: str):
+        """A query word that is not in the index -> the most frequent index term within one edit
+        ("churchhill" -> "churchill"); the word itself if nothing is close. Norvig-style candidate generation."""
+        if term in self.vocab or len(term) < 4:
+            return term
+        if getattr(self, "_df", None) is None:
+            self._df = np.diff(self.W.indptr)                   # documents per term (CSC columns)
+        letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+        splits = [(term[:i], term[i:]) for i in range(len(term) + 1)]
+        cands = {a + b[1:] for a, b in splits if b} | {a + b[1] + b[0] + b[2:] for a, b in splits if len(b) > 1} \
+            | {a + c + b[1:] for a, b in splits if b for c in letters} | {a + c + b for a, b in splits for c in letters}
+        best = max((self._df[self.vocab[c]], c) for c in cands if c in self.vocab) if any(c in self.vocab for c in cands) else None
+        return best[1] if best else term
+
     def search(self, query: str, k=5, exclude=()):
         """-> list of (score, passage_index), best first; empty if no query term is in the index.
-        Exact title matches are put first (their BM25 score + a bonus above the best other score)."""
-        ids = sorted({self.vocab[t] for t in analyze(query) if t in self.vocab})
+        Misspelled words are corrected (one edit); exact title matches are put first."""
+        terms = [self.correct(t) for t in analyze(query)]
+        ids = sorted({self.vocab[t] for t in terms if t in self.vocab})
         if not ids:
             return []
         scores = np.asarray(self.W[:, ids].sum(axis=1)).ravel()
-        exact = self.title_matches(query)
+        exact = self.title_matches(" ".join(terms))
         if exact:
             scores[exact] += float(scores.max()) + 1.0
         for e in exclude:
