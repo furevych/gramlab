@@ -1,0 +1,8 @@
+{
+  "run_name": "tiny_upos",
+  "tokenizer": {"type": "auto", "vocab_size": 16000},
+  "train_corpora": [{"name": "amalgum", "weight": 1.0}],
+  "eval_corpus": "gum_test",
+  "model": {"d_model": 256, "n_layer": 4, "n_head": 4, "ctx": 128, "dropout": 0.0, "aux_heads": ["upos", "chunk"], "aux_weight": 0.3},
+  "train": {"batch": 64, "accum": 1, "steps": 4000, "lr": 6e-4, "warmup": 200, "eval_every": 250, "eval_tokens": 200000, "seed": 1}
+}

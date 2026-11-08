@@ -1,0 +1,10 @@
+{
+  "amalgum": {"type": "ud_conllu_dir", "path": "external/amalgum/amalgum", "tokenizer_source": true,
+              "note": "3.5M tokens, 7 genres, silver UD parses (Wikipedia bios, Wikinews, Wikivoyage, wikiHow, academic, fiction, interviews)"},
+  "gum_test": {"type": "conllu_file", "path": "external/UD_English-GUM/en_gum-ud-test.conllu",
+               "genres": ["academic", "bio", "fiction", "interview", "news", "voyage", "whow"], "note": "gold eval; never train on it"},
+  "gum_dev":  {"type": "conllu_file", "path": "external/UD_English-GUM/en_gum-ud-dev.conllu",
+               "genres": ["academic", "bio", "fiction", "interview", "news", "voyage", "whow"]},
+  "wiki_qa":  {"type": "dialogue_jsonl", "path": "data/wiki_qa.jsonl", "note": "synthetic Q&A built from AMALGUM docs by scripts/make_wiki_qa.py"},
+  "my_text":  {"type": "plain_text", "path": "data/my_text.txt", "note": "drop any plain text here; blank line = new document"}
+}

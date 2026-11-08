@@ -1,0 +1,5 @@
+work/
+external/
+__pycache__/
+*.pyc
+data/my_text.txt
