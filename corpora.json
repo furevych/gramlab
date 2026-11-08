@@ -37,6 +37,11 @@
     "path": "data/wiki_qa.jsonl",
     "note": "synthetic Q&A built from AMALGUM docs by scripts/make_wiki_qa.py"
   },
+  "rag_qa": {
+    "type": "dialogue_jsonl",
+    "path": "data/rag_qa.jsonl",
+    "note": "retrieval-conditioned Q&A (Context: passage / Question: ...) built from the Wikipedia dumps + BM25 by scripts/make_rag_qa.py"
+  },
   "my_text": {
     "type": "plain_text",
     "path": "data/my_text.txt",

@@ -1,7 +1,9 @@
 """Pretraining with resume, continued training on new data, grammar aux heads, optional distillation.
 
   python -m gramlab.train --config configs/tiny.json
-  python -m gramlab.train --config configs/tiny.json --resume                 # continue the same run
+  python -m gramlab.train --config configs/tiny.json --resume                 # continue the same run (optimizer + fp16 scaler state)
+  python -m gramlab.train --config configs/small_wiki.json --resume --more_steps 8000 --set train.lr=3e-4
+                                                                              # continue a finished / time-guarded run for 8000 more steps
   python -m gramlab.train --config configs/tiny_plus.json --init_from work/runs/tiny/ckpt.pt   # new data / new corpora mix
   python -m gramlab.train --config configs/tiny_upos.json                     # aux_heads ["upos"]
   python -m gramlab.train --config configs/student.json --set train.distill.teacher=work/runs/teacher/ckpt.pt
@@ -15,6 +17,7 @@ from .model import GPT
 from .tokenizer import load_tokenizer
 from .ckpt import save_checkpoint, load_checkpoint
 from .prepare import NO_TAG
+from .amp import pick_precision
 
 
 class Shards:
@@ -68,11 +71,17 @@ def evaluate(model, shards, T, B, device, max_tokens):
     return {"eval_loss": nll, "eval_ppl": math.exp(nll), "eval_bits_per_byte": bpb}
 
 
-def lr_at(step, tr):
+def lr_at(step, tr, rewarm_from=None):
+    """Linear warmup then cosine to min_lr_ratio*lr over train.steps. When a finished/time-guarded run is
+    extended (--more_steps), the schedule is re-spanned to the new total and the first `warmup` steps after the
+    resume ramp up again (rewarm_from = the resume step), so the jump from the old final lr is gradual."""
     if step < tr["warmup"]:
         return tr["lr"] * (step + 1) / tr["warmup"]
     prog = min(1.0, (step - tr["warmup"]) / max(1, tr["steps"] - tr["warmup"]))
-    return tr["lr"] * (tr["min_lr_ratio"] + (1 - tr["min_lr_ratio"]) * 0.5 * (1 + math.cos(math.pi * prog)))
+    lr = tr["lr"] * (tr["min_lr_ratio"] + (1 - tr["min_lr_ratio"]) * 0.5 * (1 + math.cos(math.pi * prog)))
+    if rewarm_from is not None and step < rewarm_from + tr["warmup"]:
+        lr *= (step - rewarm_from + 1) / tr["warmup"]
+    return lr
 
 
 def main(argv=None):
@@ -80,18 +89,14 @@ def main(argv=None):
     ap.add_argument("--config", required=True)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init_from", default=None, help="checkpoint to initialise weights from (continued pretraining)")
+    ap.add_argument("--more_steps", type=int, default=0,
+                    help="with --resume: train this many steps beyond the checkpoint's step (the cosine schedule is re-spanned to the new total)")
     ap.add_argument("--set", action="append", default=[])
     args = ap.parse_args(argv)
     cfg = load_config(args.config, args.set)
     tr, mc = cfg["train"], cfg["model"]
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:                                                    # real bf16 hardware only (Ampere+); T4 emulates bf16 slowly
-        use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported(including_emulation=False)
-    except TypeError:
-        use_bf16 = device == "cuda" and torch.cuda.is_bf16_supported()
-    use_fp16 = device == "cuda" and not use_bf16            # T4/V100: fp16 tensor cores + loss scaling
-    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
+    amp_dtype, use_amp, use_fp16, scaler, precision = pick_precision(device)   # bf16 on Ampere+, fp16+GradScaler on T4
     torch.manual_seed(tr["seed"]); rng = np.random.default_rng(tr["seed"])
     tok_dir = tokenizer_dir(cfg)
     tok = load_tokenizer(tok_dir)
@@ -105,11 +110,21 @@ def main(argv=None):
     no_decay = [p for n, p in model.named_parameters() if p.dim() < 2]
     opt = torch.optim.AdamW([{"params": decay, "weight_decay": tr["weight_decay"]}, {"params": no_decay, "weight_decay": 0.0}],
                             lr=tr["lr"], betas=(0.9, 0.95), fused=(device == "cuda"))
-    step = 0
+    step, rewarm = 0, None
     if args.resume and os.path.exists(ckpt_path):
         st = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(st["model"]); opt.load_state_dict(st["optimizer"]); step = st["step"]
-        print(f"[train] resumed from step {step}")
+        if use_fp16 and st.get("scaler"):
+            scaler.load_state_dict(st["scaler"])                # keep the fp16 loss scale instead of re-warming it
+        if args.more_steps:
+            tr["steps"] = step + args.more_steps
+            rewarm = step
+        if step >= tr["steps"]:
+            print(f"[train] checkpoint is already at step {step} >= train.steps={tr['steps']}; use --more_steps N or --set train.steps=N")
+        print(f"[train] resumed from step {step} (target {tr['steps']}, lr now {lr_at(step, tr, rewarm):.2e}"
+              f"{', re-warming over %d steps' % tr['warmup'] if rewarm is not None else ''})")
+    elif args.resume:
+        print(f"[train] --resume given but {ckpt_path} does not exist; starting fresh")
     elif args.init_from:
         st = torch.load(args.init_from, map_location=device, weights_only=False)
         missing, unexpected = model.load_state_dict(st["model"], strict=False)   # allows adding/removing aux heads
@@ -126,11 +141,11 @@ def main(argv=None):
 
     print(f"[train] {cfg['run_name']}: {model.n_params()/1e6:.2f}M non-embedding params (+{model.tok.weight.numel()/1e6:.2f}M embedding), "
           f"vocab {len(tok)}, train tokens {train_sh.n_tokens:,}, device {device}, precision "
-          f"{'bf16' if use_bf16 else 'fp16' if use_fp16 else 'fp32'}")
+          f"{precision}")
     log = open(os.path.join(rd, "log.jsonl"), "a")
     json.dump(cfg, open(os.path.join(rd, "config.json"), "w"), indent=1)
     model.train()
-    t0 = time.time()
+    t0, step0 = time.time(), step
     B, T = tr["batch"], mc["ctx"]
     max_hours = float(tr.get("max_hours", 0) or 0)
     while step < tr["steps"]:
@@ -138,12 +153,12 @@ def main(argv=None):
             print(f"[train] time guard: {max_hours}h reached at step {step}; stopping early", flush=True)
             tr["steps"] = step                                  # final eval + checkpoint below
         for g in opt.param_groups:
-            g["lr"] = lr_at(step, tr)
+            g["lr"] = lr_at(step, tr, rewarm)
         opt.zero_grad(set_to_none=True)
         tot_lm = 0.0
         for _ in range(tr["accum"]):
             x, y, tags = train_sh.batch(B, T, rng, device)
-            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=(use_bf16 or use_fp16)):
+            with torch.autocast(device_type="cuda", dtype=amp_dtype, enabled=use_amp):
                 logits, h = model(x)
                 loss_lm = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
                 loss = loss_lm
@@ -165,14 +180,15 @@ def main(argv=None):
         scaler.update()
         step += 1
         if step % 50 == 0:
-            print(f"step {step} lm_loss {tot_lm:.3f} lr {lr_at(step, tr):.2e} {(time.time()-t0)/step:.2f}s/step", flush=True)
+            print(f"step {step} lm_loss {tot_lm:.3f} lr {lr_at(step, tr, rewarm):.2e} {(time.time()-t0)/max(1, step - step0):.2f}s/step", flush=True)
         if step % tr["eval_every"] == 0 or step == tr["steps"]:
             ev = evaluate(model, eval_sh, T, B, device, tr["eval_tokens"])
             rec = {"step": step, "train_lm_loss": round(tot_lm, 4), **{k: round(v, 4) for k, v in ev.items()},
                    "tokens_seen": step * B * T * tr["accum"], "sec": round(time.time() - t0)}
             print(json.dumps(rec), flush=True)
             log.write(json.dumps(rec) + "\n"); log.flush()
-            save_checkpoint(ckpt_path, model, opt, step, cfg, tok_dir)
+            save_checkpoint(ckpt_path, model, opt, step, cfg, tok_dir,
+                            extra={"scaler": scaler.state_dict()} if use_fp16 else None)
     print(f"[train] done -> {ckpt_path}")
 
 
