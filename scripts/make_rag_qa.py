@@ -7,10 +7,14 @@ A 25M-parameter model cannot memorise Wikipedia, but it can learn to *read*: giv
     Question: Tell me about <title>.
 it answers with the first one or two sentences of the passage. Three kinds of example, so the
 model learns to use the passage rather than guess:
-  gold        (55%)  the article's own lead paragraph                          -> its opening sentence(s)
-  gold+noise  (25%)  the gold passage and a BM25 near-miss, in random order    -> the gold answer
-  miss        (20%)  only a near-miss / unrelated passage                      -> "I don't have information about <title>."
-Questions use neutral templates (no person/place guessing). Passages are cut at sentence boundaries so
+  gold        (60%)  the article's own lead paragraph                          -> its opening sentence(s)
+  gold+noise  (28%)  the gold passage and a BM25 near-miss, in random order    -> the gold answer
+  miss        (12%)  only a near-miss / unrelated passage                      -> "I don't have information about <title>."
+Questions use neutral templates (no person/place guessing), and the entity in the question is deliberately NOT
+always the title as spelled in the passage header: lowercased, a partial name ("Gates" for "Bill Gates"), or no
+entity at all ("Tell me about this."). Run 2 showed why: with exact titles only, the model learned the rule
+"question string != Context title -> refuse" and refused every question a person typed ("who is bill gates?"
+against the right Bill Gates passage). Passages are cut at sentence boundaries so
 everything fits the model's 256-token context; finetune.py trims the context further if needed.
 At chat time, `python -m gramlab.chat --retrieve work/bm25` reproduces exactly this format.
 """
@@ -19,8 +23,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from gramlab.retrieval import BM25Index, cut_words, format_rag_user
 
 TEMPLATES = ["Tell me about {t}.", "What is {t}?", "What do you know about {t}?", "Describe {t}.",
-             "What can you tell me about {t}?", "Can you tell me something about {t}?", "{t}?", "Explain {t}."]
+             "What can you tell me about {t}?", "Can you tell me something about {t}?", "{t}?", "Explain {t}.",
+             "Who is {t}?", "Who was {t}?", "Where is {t}?", "What is {t} known for?", "tell me about {t}", "{t}",
+             "What's {t}?", "Do you know anything about {t}?", "I want to know about {t}.", "what is {t}"]
+NO_ENTITY = ["Tell me about this.", "What is this about?", "Summarize the passage.", "What does the context say?",
+             "What is this?", "Explain this.", "Tell me more."]
 MISS_ANSWER = "I don't have information about {t}."
+
+
+def surface(t, rng):
+    """How a person might write the entity: exact title 40%, lowercased 30%, partial name 20%, before the comma 10%."""
+    r = rng.random()
+    words = t.split()
+    if len(words) == 1:
+        return t if r < 0.5 else t.lower()
+    if r < 0.40:
+        return t
+    if r < 0.70:
+        return t.lower()
+    if r < 0.90:
+        # a part of a multi-word title: the last word ("Gates"), the first ("Bill"), or all but the first ("York" for "New York")
+        part = rng.choice([words[-1], words[0], " ".join(words[1:])])
+        return part if rng.random() < 0.6 else part.lower()
+    return t.split(",")[0].strip()
 _SENT = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(\[])")
 
 
@@ -56,7 +81,8 @@ def main():
     ap.add_argument("--n", type=int, default=20000, help="articles to sample")
     ap.add_argument("--ctx_words", type=int, default=90, help="passage length in words (halved when two passages are shown)")
     ap.add_argument("--min_words", type=int, default=25)
-    ap.add_argument("--mix", default="0.55,0.25,0.20", help="gold, gold+noise, miss proportions")
+    ap.add_argument("--mix", default="0.60,0.28,0.12", help="gold, gold+noise, miss proportions")
+    ap.add_argument("--p_no_entity", type=float, default=0.12, help="share of gold questions that do not name the entity at all")
     ap.add_argument("--seed", type=int, default=3)
     args = ap.parse_args()
     rng = random.Random(args.seed)
@@ -90,9 +116,13 @@ def main():
             t = clean_title(title)
             if not t:
                 counts["skipped"] += 1; continue
-            q = rng.choice(TEMPLATES).format(t=t)
             r = rng.random()
             variant = "gold" if r < p_gold else "gold+noise" if r < p_gold + p_noise else "miss"
+            ts = surface(t, rng)                                   # the entity as the person might type it
+            if variant == "gold" and rng.random() < args.p_no_entity:
+                q = rng.choice(NO_ENTITY)
+            else:
+                q = rng.choice(TEMPLATES).format(t=ts)
             words = args.ctx_words if variant == "gold" else args.ctx_words // 2
             gold = cut_words(lead, words)
             answer = answer_from(gold)
@@ -110,7 +140,7 @@ def main():
             else:
                 other = near_miss(q, title)
                 ctxs = [{"title": other["title"], "text": cut_words(other["text"], args.ctx_words)}]
-                answer = MISS_ANSWER.format(t=t)
+                answer = MISS_ANSWER.format(t=ts)
             out.write(json.dumps({"messages": [{"role": "user", "content": format_rag_user(ctxs, q)},
                                                {"role": "assistant", "content": answer}],
                                   "source": title, "variant": variant}, ensure_ascii=False) + "\n")
