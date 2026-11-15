@@ -153,3 +153,34 @@ band)"; fixed after the run by ranking titles that *contain* the query words by 
 
 **Next**: the meaning map (CPU): regress slot codes from the chunked AMALGUM sentences onto `work/teacher/
 amalgum_sent.npy`, score on STS-B (teacher 0.824) and on the body-sentence queries (BM25 0.233, teacher ≈0.33).
+
+## Run 4 — map stage v1, 2026-11-15 (`gramlab-map` Version 1, CPU, 46 min; `kaggle_map.ipynb`)
+
+Map: 32-dim code per word (40k words + 8k hash buckets), summed per POS-chunk slot, linear readout onto MiniLM's
+384-dim space, cosine regression on 191k parsed AMALGUM sentences. 1.63M parameters. Control: same model, one slot.
+
+| system | fit to teacher (val cosine) | STS-B Spearman | retrieval recall@1 all / title / body | BM25 + map hybrid |
+|---|---|---|---|---|
+| map, 7 grammar slots | **0.570** | 0.662 | 0.061 / 0.101 / 0.021 | 0.582 / 0.957 / 0.208 |
+| map, bag of words | 0.537 | **0.679** | 0.053 / 0.091 / 0.015 | 0.578 / 0.956 / 0.200 |
+| BM25 | — | — | **0.607 / 0.981 / 0.233** | — |
+| teacher (MiniLM, 22M params) | 1 | 0.824 | 0.590 / 0.849 / **0.331** | — |
+
+What it says:
+1. **The word codes learned synonymy** — the "synonyms as numbers" idea works at 32 numbers per word: city →
+   urban, cities, metropolis, town; kill → killed, murdered, assassinate, stabbed; hate → dislike, despise; quickly →
+   fast, rapidly, swiftly; france → french, european, strasbourg. (Nearest neighbours of *born* are names: the
+   regression cannot separate a word from what it co-occurs with.) This is directly usable for the intent scorer
+   (lexicon expansion: hate → dislike/despise).
+2. **Grammar slots help the map fit the teacher (+0.033 cosine) but not the tasks**: on STS-B the bag of words is
+   slightly better (0.679 vs 0.662); the POS-pattern slots add errors on paraphrase pairs whose structure differs.
+   Same pattern as the LM experiments: the grammar signal is real but small, and it is not where the gains are.
+3. **As a retriever v1 is useless on its own and slightly hurts BM25 in the hybrid.** Cause is clear: it was
+   trained on single sentences, but passages are ~60 words plus a title, so the slot *sums* are dominated by
+   length and frequent words, and a query like "Tell me about Belgrade." is mostly template words. 0.66 STS-B for
+   1.6M parameters is respectable (the teacher is 22M), but regression onto a sentence embedding is the wrong
+   training signal for retrieval.
+
+**Decision**: keep the codes, drop the slots for the map, and train v2 for the actual job: mean-pooled codes,
+trained on *passages* (title + text) against teacher passage embeddings plus query→passage pairs (the title
+questions and body sentences the scoreboard uses), scored on the same scoreboard. CPU, no GPU quota.
