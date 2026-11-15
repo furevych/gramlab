@@ -134,7 +134,7 @@ def pad_batch(feats, pad_word):
 
 
 # ------------------------------------------------------------------------------------------------ torch model
-def build_model(vocab_size, n_slots, dim=32, out_dim=384):
+def build_model(vocab_size, n_slots, dim=32, out_dim=384, pool="sum"):
     import torch, torch.nn as nn, torch.nn.functional as F
 
     class MeaningMap(nn.Module):
@@ -143,13 +143,16 @@ def build_model(vocab_size, n_slots, dim=32, out_dim=384):
             self.code = nn.Embedding(vocab_size + 1, dim, padding_idx=vocab_size)   # last row = padding
             self.slot_gate = nn.Parameter(torch.ones(n_slots, dim))                  # per-slot reweighting of a code
             self.out = nn.Linear(n_slots * dim, out_dim)
-            self.n_slots, self.dim = n_slots, dim
+            self.n_slots, self.dim, self.pool = n_slots, dim, pool
             nn.init.normal_(self.code.weight, std=0.1)
 
         def slot_sums(self, W, S, M):
             c = self.code(W) * self.slot_gate[S] * M.unsqueeze(-1)                  # B,L,dim
             onehot = F.one_hot(S, self.n_slots).float() * M.unsqueeze(-1)            # B,L,slots
-            return torch.einsum("bls,bld->bsd", onehot, c)                           # B,slots,dim
+            h = torch.einsum("bls,bld->bsd", onehot, c)                              # B,slots,dim
+            if self.pool == "mean":                                                  # length-invariant: a 60-word passage
+                h = h / onehot.sum(1).clamp(min=1).unsqueeze(-1)                     # and a 5-word question live on the same scale
+            return h
 
         def forward(self, W, S, M):
             h = self.slot_sums(W, S, M).flatten(1)
@@ -165,7 +168,7 @@ class MapEncoder:
         meta = json.load(open(os.path.join(d, "meta.json")))
         self.vocab = Vocab.load(os.path.join(d, "vocab.json"))
         self.use_slots = meta["n_slots"] > 1
-        self.model = build_model(len(self.vocab), meta["n_slots"], meta["dim"], meta["out_dim"])
+        self.model = build_model(len(self.vocab), meta["n_slots"], meta["dim"], meta["out_dim"], meta.get("pool", "sum"))
         self.model.load_state_dict(torch.load(os.path.join(d, "map.pt"), map_location="cpu"))
         self.model.eval()
         self.meta = meta
@@ -181,12 +184,14 @@ class MapEncoder:
         return np.concatenate(out) if out else np.zeros((0, self.meta["out_dim"]), dtype=np.float32)
 
 
-def train_map(sentences, targets, out_dir, n_slots=len(SLOTS), dim=32, epochs=8, batch=256, lr=3e-3, val_frac=0.05, seed=1, log=print):
-    """sentences: list of (forms, upos); targets: float array [n, out_dim] (teacher embeddings, any scale)."""
+def train_map(sentences, targets, out_dir, n_slots=len(SLOTS), dim=32, epochs=8, batch=256, lr=3e-3, val_frac=0.05, seed=1, pool="sum",
+              vocab=None, log=print):
+    """sentences: list of (forms, upos); targets: float array [n, out_dim] (teacher embeddings, any scale).
+    pool="mean" averages codes per slot instead of summing (use it when inputs differ in length)."""
     import torch, torch.nn.functional as F
     torch.manual_seed(seed); rng = np.random.default_rng(seed)
     os.makedirs(out_dir, exist_ok=True)
-    vocab = Vocab.build(sentences)
+    vocab = vocab or Vocab.build(sentences)
     vocab.save(os.path.join(out_dir, "vocab.json"))
     use_slots = n_slots > 1
     feats = [featurize(f, u, vocab, use_slots) for f, u in sentences]
@@ -196,7 +201,7 @@ def train_map(sentences, targets, out_dir, n_slots=len(SLOTS), dim=32, epochs=8,
     Y = F.normalize(Y, dim=-1)
     idx = rng.permutation(len(feats)); n_val = max(1, int(len(feats) * val_frac))
     val_idx, tr_idx = idx[:n_val], idx[n_val:]
-    model = build_model(len(vocab), n_slots, dim, Y.shape[1])
+    model = build_model(len(vocab), n_slots, dim, Y.shape[1], pool)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     steps_total = epochs * ((len(tr_idx) + batch - 1) // batch)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1 - s / max(1, steps_total))
@@ -224,6 +229,6 @@ def train_map(sentences, targets, out_dir, n_slots=len(SLOTS), dim=32, epochs=8,
             va = run(val_idx, False)
         log(f"[map] epoch {ep + 1}: train cos-loss {tr:.4f}  val cos-loss {va:.4f}  (val cosine to teacher {1 - va:.4f})")
     torch.save(model.state_dict(), os.path.join(out_dir, "map.pt"))
-    json.dump({"n_slots": n_slots, "dim": dim, "out_dim": int(Y.shape[1]), "epochs": epochs, "val_cosine": round(1 - va, 4),
+    json.dump({"n_slots": n_slots, "dim": dim, "out_dim": int(Y.shape[1]), "epochs": epochs, "val_cosine": round(1 - va, 4), "pool": pool,
                "slots": SLOTS[:n_slots] if use_slots else ["ALL"]}, open(os.path.join(out_dir, "meta.json"), "w"), indent=1)
     return MapEncoder(out_dir)
