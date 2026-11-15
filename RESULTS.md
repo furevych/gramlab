@@ -133,3 +133,23 @@ the index are spell-corrected within one edit ("churchhill" → "churchill").
 
 **Stage 3** (`kaggle_stage3.ipynb`): +400k English Wikipedia articles, one pass over the ~620M-token mix, fresh
 BM25/Q&A, answers with the fixed decoding.
+
+## Run 3 — stage 3, 2026-11-14/15 (Kaggle Version 3 of `gramlab`, 4.5 h)
+
++400,000 English Wikipedia articles (411M tokens; mix now 628M tokens), one pass in the 4 h budget (step 26,686 →
+48,742, 1.57B tokens seen in total). Writer: perplexity 46.1 → **44.8**, bits/byte 1.314 → **1.304**. As expected,
+fresh data still moves it but slowly: the 25M writer is at its capacity. **Frozen here.**
+
+**The answers are now correct.** With the decoding fix, the retrieval-conditioned model reads the passage faithfully:
+"The capital of Japan is Tokyo. In the course of history, the national capital has been in many locations other than
+Tokyo."; Napoleon, Einstein, Danube, photosynthesis, volcano likewise; "Zxqv Blorptown" → "I don't have information
+about Zxqv Blorptown." The no-retrieval control stays fluent and wrong (Einstein "a German artist of the early
+Baroque period"). This is the architecture working as designed: facts from the index, words from the writer.
+
+Retrieval over 658,694 passages: title recall@1 0.981, body-sentence 0.233 (down from 0.266 with 2.5× more
+passages), all 0.607. One residual: "who is churchhill" (misspelt, no first name) retrieved "The Churchills (Israeli
+band)"; fixed after the run by ranking titles that *contain* the query words by how much of the title they cover
+("Winston Churchill" = 0.5 beats a three-word disambiguated title) — applies at chat time, no retraining.
+
+**Next**: the meaning map (CPU): regress slot codes from the chunked AMALGUM sentences onto `work/teacher/
+amalgum_sent.npy`, score on STS-B (teacher 0.824) and on the body-sentence queries (BM25 0.233, teacher ≈0.33).
