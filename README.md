@@ -126,7 +126,7 @@ sessions count against the quota).
 | grammar-heads sample-efficiency test | 3 arms × 3 seeds at 250k/1M/4M tokens, bits/byte + BLiMP (`scripts/sweep_arms.py`) | 0.75 h | stage 2 |
 | writer | 25M model, ~3 epochs of 217M clean tokens, fp16 | ~5 h | stage 2 |
 | retrieval baseline | BM25 over Wikipedia leads; retrieval-conditioned Q&A fine-tune; scoreboard (recall@k) | 0.5 h | stage 2 |
-| map + index | teacher embeddings (stage 2) → regress 32-dim grammar-slot codes from chunked sentences (CPU) → index; STS-B test; beat BM25 on the scoreboard | 0 | next |
+| map + index | `gramlab/map.py` + `scripts/map_stage.py` + `kaggle_map.ipynb`: 32-dim word codes summed per POS-chunk slot, cosine-regressed onto the teacher; scored on STS-B and the retrieval scoreboard vs a bag-of-words control, BM25 and the teacher; BM25+map hybrid | 0 (CPU) | running |
 | intent scorer | power-word lexicon + POS → logistic regression | 0 | next |
 | single-hop reasoning | ~10k step-by-step traces from an open teacher, fine-tune the writer | 10–20 h or API | later |
 | two-hop | swap the writer for a ~1B open model (LoRA, 4-bit) in an iterative retrieve-think loop | 6–10 h | later |
@@ -160,6 +160,8 @@ scripts/make_wiki_qa.py synthetic Q&A from AMALGUM for the first fine-tune
 scripts/make_rag_qa.py  retrieval-conditioned Q&A (gold / gold+near-miss / miss) from the Wikipedia dumps
 scripts/plot_pos_loss.py per-POS loss chart from evaluate --per_pos results
 scripts/sweep_arms.py    baseline vs grammar heads at small data, several seeds (sample-efficiency curve)
+  map.py                the grammar meaning map (POS-pattern chunker, word codes per slot, teacher regression)
+scripts/map_stage.py     trains slots vs bag-of-words maps, STS-B + retrieval scoreboard + hybrid; kaggle_map.ipynb runs it on CPU
 scripts/teacher_embed.py teacher embeddings (map targets), dense retrieval baseline, STS-B pairs
 kaggle_continue.ipynb   stage-2 unattended run (continues from Kaggle Version 1)
 RESULTS.md              findings per run and the decisions they caused
