@@ -56,5 +56,10 @@
     "type": "plain_text",
     "path": "data/enwiki.jsonl",
     "note": "first ~120k English Wikipedia articles by page id (scripts/fetch_wikipedia.py --lang en --max_articles 120000)"
+  },
+  "enwiki2": {
+    "type": "plain_text",
+    "path": "data/enwiki2.jsonl",
+    "note": "English Wikipedia articles 120k-520k by page id (fetch_wikipedia.py --lang en --skip 120000 --max_articles 400000)"
   }
 }

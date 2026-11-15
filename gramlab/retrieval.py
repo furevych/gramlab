@@ -242,7 +242,9 @@ class BM25Index:
         scores = np.asarray(self.W[:, ids].sum(axis=1)).ravel()
         exact = self.title_matches(" ".join(terms))
         if exact:
-            scores[exact] += float(scores.max()) + 1.0
+            top = float(scores.max()) + 1.0
+            for i in exact:                                     # "Paris" ranks above "Paris (Paris Hilton album)"
+                scores[i] += top * (2.0 if "(" not in self.titles[i] else 1.0)
         for e in exclude:
             scores[e] = 0.0
         kk = min(k, len(scores))

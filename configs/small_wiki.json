@@ -10,6 +10,10 @@
       "weight": 1.0
     },
     {
+      "name": "enwiki2",
+      "weight": 1.0
+    },
+    {
       "name": "simplewiki",
       "weight": 1.0
     },

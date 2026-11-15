@@ -79,18 +79,20 @@ class GPT(nn.Module):
         """Sampling with a repetition penalty on every token already in the window and a hard ban on repeating
         any n-gram already present (no_repeat_ngram=3 stops the "Tokyo, Japan, Japan, Japan" loops; 0 disables)."""
         self.eval()
-        for _ in range(max_new_tokens):
+        prompt_len = idx.size(1)          # penalties apply to what the model wrote, not to the prompt: a retrieved
+        for _ in range(max_new_tokens):   # passage must stay copyable, or "Tokyo" in the context gets penalised into "Stockholm"
             logits, _ = self(idx[:, -self.ctx:])
             logits = logits[:, -1, :].float()
-            if repetition_penalty != 1.0:
+            gen = idx[:, prompt_len:]
+            if repetition_penalty != 1.0 and gen.size(1) > 0:
                 for b in range(idx.size(0)):
-                    seen = torch.unique(idx[b])
+                    seen = torch.unique(gen[b])
                     logits[b, seen] = torch.where(logits[b, seen] > 0, logits[b, seen] / repetition_penalty,
                                                   logits[b, seen] * repetition_penalty)
-            if no_repeat_ngram and idx.size(1) >= no_repeat_ngram:
+            if no_repeat_ngram and gen.size(1) >= no_repeat_ngram:
                 n = no_repeat_ngram
                 for b in range(idx.size(0)):
-                    seq = idx[b].tolist()
+                    seq = gen[b].tolist()
                     prefix = tuple(seq[-(n - 1):])
                     banned = [seq[i + n - 1] for i in range(len(seq) - n + 1) if tuple(seq[i:i + n - 1]) == prefix]
                     if banned:

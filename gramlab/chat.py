@@ -32,7 +32,7 @@ def main(argv=None):
     ap.add_argument("--k", type=int, default=1, help="passages per question with --retrieve")
     ap.add_argument("--ctx_words", type=int, default=90, help="words per retrieved passage (keep ctx room for the answer)")
     ap.add_argument("--show_context", action="store_true", help="print the retrieved passage(s) too")
-    ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--temperature", type=float, default=None, help="default 0.8; 0.3 for retrieval-conditioned checkpoints")
     ap.add_argument("--top_k", type=int, default=40)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--rep", type=float, default=1.2)
@@ -52,6 +52,8 @@ def main(argv=None):
             print("[chat] note: this checkpoint was not fine-tuned on retrieval-conditioned data (rag=False); answers may ignore the passage")
     elif state.get("rag"):
         print("[chat] note: this checkpoint expects a retrieved passage before each question; pass --retrieve work/bm25")
+    if args.temperature is None:
+        args.temperature = 0.3 if state.get("rag") else 0.8
     n_hist = 0 if index is not None else args.history
     print(f"[chat] {args.ckpt}: {model.n_params()/1e6:.2f}M non-emb params, step {state['step']}, mode={mode}"
           f"{', retrieval over %s passages' % format(len(index), ',') if index is not None else ''}. Ctrl-D / 'quit' to exit.")

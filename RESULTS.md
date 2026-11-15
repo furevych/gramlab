@@ -95,3 +95,41 @@ Japan → "Tokyo, Tokyo, Japan, Japan, Japan …" (decoding loop; fixed by the n
   baseline, recall@k on title and body-sentence queries) that the map has to beat, teacher sentence embeddings for
   the BM25 passages and for every parsed AMALGUM sentence (regression targets for the 32-dim slot codes), and the
   STS-B pairs for the map's similarity test.
+
+## Run 2 — stage 2 full run, 2026-11-08/09 (Kaggle Version 2 of `gramlab`, 4.5 h, fp16 at 0.61 s/step)
+
+**Writer.** `small_wiki` continued from step 4,000 to 26,686 (874M tokens ≈ 4 passes over the 217M-token mix):
+perplexity on gold GUM 68.5 → **46.1**, bits/byte 1.450 → **1.314**. The curve is flat at the end (46.46 at step
+24k, 46.1 at 26.7k): more epochs of this data buy nothing more; the next lever is more data or a bigger model.
+
+**Retrieval scoreboard** (3,000 queries, 264k passages): BM25 with exact-title ranking — title queries recall@1
+**0.982** (0.89 before the fix), body-sentence queries **0.266** / @5 0.423 / @10 0.491. Dense MiniLM teacher: title
+0.849, body **0.331** / 0.466 / 0.516. The body case (different words, same meaning) is the map's target; BM25 and
+the teacher are within 7 points of each other there and both are low.
+
+**Grammar heads, sample-efficiency sweep** (3 seeds, bits/byte on gold GUM, min–max in brackets):
+
+| tokens | none | upos | chunk |
+|---|---|---|---|
+| 250k | 2.597 (2.591–2.603) | 2.596 (2.594–2.598) | 2.600 (2.598–2.602) |
+| 1M | 2.280 (2.279–2.280) | **2.260** (2.259–2.263) | 2.264 (2.263–2.266) |
+| 4M | 2.043 (2.042–2.044) | 2.041 (2.038–2.044) | 2.042 (2.040–2.043) |
+
+A real but small effect: at 1M tokens the UPOS head is 0.9% better than the baseline, outside the seed spread; at
+250k nothing yet, at 4M the arms have converged. BLiMP at 100 pairs/phenomenon is noise (0.51–0.54). This is the
+neural copy of run 0's curve (−13.6% → −8% perplexity for the n-gram class model) at a much smaller size: the
+Transformer already extracts most of what a tag head could add. Decision stands: parked; not worth building on.
+
+**Per-POS loss** (`results/per_pos_loss.png`): 25M model's tagged-token loss 3.83 vs 4.91 for the 3M model; loss by
+chunk position 4.07 at chunk starts, **4.54 inside chunks** (content words), 2.27 outside (punctuation, function words).
+
+**Answers.** The retrieval-conditioned model's val loss was 0.047 (copying is learned), yet its answers were garbled
+("The capital of Japan is Stockholm", "third-longest river in Africa"). Cause: the repetition penalty and the n-gram
+ban were applied to the whole window including the retrieved passage, so every word of the passage was penalised at
+generation time — exactly the words a reader must copy. Fixed in `generate()` after this run (penalties only on
+generated tokens; retrieval chat decodes at temperature 0.3). Two retrieval fixes also went in: exact-title ranking
+prefers plain titles over disambiguated ones ("Paris" over "Paris (Paris Hilton album)"), and query words not in
+the index are spell-corrected within one edit ("churchhill" → "churchill").
+
+**Stage 3** (`kaggle_stage3.ipynb`): +400k English Wikipedia articles, one pass over the ~620M-token mix, fresh
+BM25/Q&A, answers with the fixed decoding.
