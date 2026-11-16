@@ -232,3 +232,47 @@ def train_map(sentences, targets, out_dir, n_slots=len(SLOTS), dim=32, epochs=8,
     json.dump({"n_slots": n_slots, "dim": dim, "out_dim": int(Y.shape[1]), "epochs": epochs, "val_cosine": round(1 - va, 4), "pool": pool,
                "slots": SLOTS[:n_slots] if use_slots else ["ALL"]}, open(os.path.join(out_dir, "meta.json"), "w"), indent=1)
     return MapEncoder(out_dir)
+
+
+class HybridRetriever:
+    """BM25 candidates re-ranked by the map: score = weight * bm25/max + cosine(map(query), map(passage)).
+    guard=True keeps BM25's answer whenever its top hit is an exact title match (the map only helps where words differ)."""
+    def __init__(self, index, encoder, passages_vec, tag_fn, weight=1.0, guard=False, top_n=50):
+        self.index, self.enc, self.P, self.tag, self.weight, self.guard, self.top_n = index, encoder, passages_vec, tag_fn, weight, guard, top_n
+
+    @classmethod
+    def load(cls, index, map_dir, tag_fn):
+        enc = MapEncoder(map_dir)
+        P = np.load(os.path.join(map_dir, "passages.npy")).astype(np.float32)
+        cfg = {}
+        hp = os.path.join(map_dir, "hybrid.json")
+        if os.path.exists(hp):
+            cfg = json.load(open(hp))
+        return cls(index, enc, P, tag_fn, weight=cfg.get("weight", 1.0), guard=cfg.get("guard", False))
+
+    def search(self, query, k=5, qvec=None):
+        hits = self.index.search(query, self.top_n)
+        if not hits:
+            return []
+        if self.guard:
+            from .retrieval import analyze
+            terms = [self.index.correct(t) for t in analyze(query)]
+            covered = self.index.title_contains([t for t in terms if t in self.index.vocab])
+            if hits[0][1] in covered and covered[hits[0][1]] >= 1.0:
+                return hits[:k]
+        if qvec is None:
+            qvec = self.enc.encode([self.tag(query)])[0]
+        mx = max(h[0] for h in hits)
+        sc = sorted(((self.weight * h[0] / mx + float(qvec @ self.P[h[1]]), h[1]) for h in hits), reverse=True)
+        return sc[:k]
+
+    def retrieve(self, query, k=1, max_words=None):
+        from .retrieval import cut_words
+        out = []
+        for score, i in self.search(query, k):
+            p = self.index.passage(i)
+            if max_words:
+                p["text"] = cut_words(p["text"], max_words)
+            p["score"] = round(float(score), 3); p["index"] = int(i)
+            out.append(p)
+        return out
