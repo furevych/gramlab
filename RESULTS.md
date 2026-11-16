@@ -235,3 +235,12 @@ A regression noticed on the way: the partial-title ranking added after run 3 cos
 
 Where the map stands: a 2.3M-parameter grammar-slot encoder that makes BM25 slightly better on paraphrased queries
 and gives compact synonym codes; not a replacement for a 22M dense encoder (teacher body recall 0.331).
+
+## Run 7 — full English Wikipedia index, 2026-11-16 (`gramlab-fullwiki` Version 1, CPU, 71 min)
+
+4,955,232 article leads (258M words), BM25 index 3.0 GB (2.24M terms, 140M postings), built in 8.5 min after a
+57-min stream of the dump. Scoreboard on the same 3,000 queries: title recall@1 **0.913**, body **0.167**, all 0.540
+(vs 0.981 / 0.233 / 0.607 over 659k passages): 7.5× more passages means 7.5× more look-alikes, mostly on body
+queries. Single-surname questions ("who is churchhill") now land on whichever "Churchill" article uses the word most
+("Churchill Show", a Kenyan comedy) — a first name fixes it; a popularity prior would be the principled fix.
+The chat notebook prefers this index when the `gramlab-fullwiki` output is attached.
