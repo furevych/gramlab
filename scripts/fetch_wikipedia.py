@@ -30,12 +30,14 @@ def main():
     ap.add_argument("--snapshot", default="20231101")
     ap.add_argument("--max_articles", type=int, default=0, help="0 = all")
     ap.add_argument("--skip", type=int, default=0, help="skip this many kept articles first (continue a previous fetch)")
+    ap.add_argument("--lead_only", type=int, default=0, help="keep only the first paragraph, cut to this many words (index-only dumps)")
+    ap.add_argument("--stream", action="store_true", help="stream even without --max_articles (no 20 GB cache)")
     ap.add_argument("--min_words", type=int, default=60)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     from datasets import load_dataset
     name = f"{args.snapshot}.{args.lang}"
-    stream = bool(args.max_articles or args.skip)
+    stream = bool(args.max_articles or args.skip or args.stream)
     print(f"[fetch] wikimedia/wikipedia {name} (streaming={stream}) ...", flush=True)
     ds = load_dataset("wikimedia/wikipedia", name, split="train", streaming=stream)
     t0 = time.time(); n = kept = words = skipped = 0
@@ -49,6 +51,11 @@ def main():
                     if skipped % 20000 == 0:
                         print(f"[fetch] skipped {skipped:,} / {args.skip:,} ({time.time()-t0:.0f}s)", flush=True)
                     continue
+                if args.lead_only:
+                    lead = next((p for p in text.split("\n") if len(p.split()) >= 20), "")
+                    if not lead:
+                        continue
+                    text = " ".join(lead.split()[:args.lead_only])
                 fh.write(json.dumps({"title": r["title"], "text": text}, ensure_ascii=False) + "\n")
                 kept += 1; words += len(text.split())
             if kept and kept % 20000 == 0:
