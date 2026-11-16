@@ -184,3 +184,35 @@ What it says:
 **Decision**: keep the codes, drop the slots for the map, and train v2 for the actual job: mean-pooled codes,
 trained on *passages* (title + text) against teacher passage embeddings plus query→passage pairs (the title
 questions and body sentences the scoreboard uses), scored on the same scoreboard. CPU, no GPU quota.
+
+## Run 5 — map stage v2, 2026-11-15 (`gramlab-map` Version 2, CPU, 2.4 h)
+
+Same map (32-dim word codes, 7 POS-chunk slots, linear readout), trained for retrieval: mean pooling; inputs = 150k
+passages ("title: text") + 291k question→passage and body-sentence→passage pairs (articles outside the scoreboard);
+targets = the teacher's passage embeddings (266k, computed on CPU). Vocabulary 60k + 8k hash buckets; 2.27M parameters.
+
+| system | STS-B | map alone recall@1 all / title / body | BM25 + map hybrid all / title / body |
+|---|---|---|---|
+| map v2, 7 grammar slots | 0.598 | **0.179 / 0.289 / 0.069** | 0.604 / 0.957 / **0.251** |
+| map v2, bag of words | 0.662 | 0.117 / 0.194 / 0.040 | 0.595 / 0.957 / 0.232 |
+| BM25 | — | **0.607 / 0.981 / 0.233** | — |
+| teacher (MiniLM) | 0.824 | 0.590 / 0.849 / 0.331 | — |
+
+1. **First clear win for the grammar slots.** Trained for retrieval, the slot map beats the identical bag-of-words
+   map by a wide margin on its own (recall@1 0.179 vs 0.117 over 3,000 queries; body 0.069 vs 0.040) — far outside
+   sampling noise. Which words are subject, verb, object and prepositional object matters for matching a question
+   to a passage, in a way it did not matter for sentence similarity (STS-B, where the bag of words still wins).
+2. **The BM25 + slot-map hybrid is the best body-sentence retriever we have without the teacher**: 0.251 vs 0.233
+   for BM25 (+1.8 points on 1,500 queries — about the noise level, so "at least as good", not yet "better"), while
+   it costs 2.4 points on title queries (0.957 vs 0.981) because the map's re-ranking disturbs exact-title hits.
+   The map alone is still far below BM25 (0.179 vs 0.607) and below the teacher on body queries (0.069 vs 0.331).
+3. **Map v2 trained 3× more data than v1 for a worse fit** (val cosine 0.46 vs 0.57): passage targets are harder,
+   and 2.3M parameters cannot do what MiniLM's 22M do. It is the cheap complement to BM25, not a replacement.
+4. **The word codes split by use**: v1 (sentence-level, AMALGUM) gives clean synonymy (hate → dislike, despise;
+   quickly → fast, rapidly) and is the one to use for the intent lexicon; v2 (passage-level Wikipedia) gives
+   topical neighbours (river → tributaries, dam, basin; born → raised, graduated) and junk for abstract words
+   (hate, rage, quickly) — the right codes for retrieval, the wrong ones for intent.
+
+**Next (cheap, CPU)**: tune the hybrid so it keeps BM25's exact-title answers (apply the map only when BM25 has no
+exact-title hit, or weight BM25 2:1), on half the scoreboard and report on the other half; then the chat
+notebook's hybrid retriever uses it. The map's passage matrix is saved (`work/map2/slots/passages.npy`).
