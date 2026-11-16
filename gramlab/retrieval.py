@@ -257,12 +257,14 @@ class BM25Index:
         if not ids:
             return []
         scores = np.asarray(self.W[:, ids].sum(axis=1)).ravel()
-        self.title_matches(" ".join(terms))                     # builds the title index on first use
-        covered = self.title_contains([t for t in terms if t in self.vocab])
-        if covered:
-            top = float(scores.max()) + 1.0
-            for i, share in covered.items():                    # "Paris" > "Paris (Paris Hilton album)" > "Paris Opera";
-                scores[i] += top * share * (2.0 if "(" not in self.titles[i] else 1.0)   # "churchill" -> "Winston Churchill"
+        exact = self.title_matches(" ".join(terms))
+        top = float(scores.max()) + 1.0
+        if exact:                                               # "Paris" > "Paris (Paris Hilton album)"
+            for i in exact:
+                scores[i] += top * (2.0 if "(" not in self.titles[i] else 1.0)
+        else:                                                   # no article with exactly these words: prefer titles that
+            for i, share in self.title_contains([t for t in terms if t in self.vocab]).items():   # contain them all,
+                scores[i] += top * share * (2.0 if "(" not in self.titles[i] else 1.0)         # "churchill" -> "Winston Churchill"
         for e in exclude:
             scores[e] = 0.0
         kk = min(k, len(scores))

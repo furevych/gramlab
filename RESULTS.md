@@ -216,3 +216,22 @@ targets = the teacher's passage embeddings (266k, computed on CPU). Vocabulary 6
 **Next (cheap, CPU)**: tune the hybrid so it keeps BM25's exact-title answers (apply the map only when BM25 has no
 exact-title hit, or weight BM25 2:1), on half the scoreboard and report on the other half; then the chat
 notebook's hybrid retriever uses it. The map's passage matrix is saved (`work/map2/slots/passages.npy`).
+
+## Run 6 — hybrid tuning, 2026-11-15 (`gramlab-hybrid` Version 1, CPU, 2 min)
+
+BM25 top-50 re-ranked by the slot map: score = w · BM25/max + cosine. Rule chosen on half the scoreboard, reported
+on the other half (750 title + 750 body queries):
+
+| rule (held-out half) | all | title | body |
+|---|---|---|---|
+| BM25 alone | 0.593 | 0.949 | 0.237 |
+| hybrid, w = 2 (chosen on dev) | **0.599** | 0.947 | **0.252** |
+| hybrid, w = 1 + exact-title guard (best on test, not chosen) | 0.607 | 0.953 | 0.261 |
+
+The hybrid is at parity with BM25 on title queries and +1.5 points on body-sentence queries on the held-out half —
+a consistent small edge across all weights 1–3, never a loss. Saved as the chat retriever (`hybrid.json`: w = 2).
+A regression noticed on the way: the partial-title ranking added after run 3 cost ~2.5 points on title queries
+(0.981 → 0.956); fixed by applying it only when no exact-title article exists.
+
+Where the map stands: a 2.3M-parameter grammar-slot encoder that makes BM25 slightly better on paraphrased queries
+and gives compact synonym codes; not a replacement for a 22M dense encoder (teacher body recall 0.331).
