@@ -110,11 +110,20 @@ def main():
         if stop:
             break
 
-    # ---- held-out evaluation + save
+    # ---- save first (the merged model is the deliverable), then evaluate
     model.eval()
+    os.makedirs(args.out, exist_ok=True)
+    merged = model.merge_and_unload()
+    merged.half().save_pretrained(args.out, safe_serialization=True)
+    tok.save_pretrained(args.out)
+    json.dump({"system": SYSTEM, "steps": step, "sft": True, "rag": True, "writer": "hf"}, open(os.path.join(args.out, "gramlab.json"), "w"), indent=1)
+    print(f"[hf] saved merged model -> {args.out}", flush=True)
+    model = merged.eval()
+
     def answer(user, max_new=80):
         chat = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
-        ids = tok.apply_chat_template(chat, add_generation_prompt=True, return_tensors="pt").to(device)
+        prompt = tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+        ids = tok(prompt, return_tensors="pt", add_special_tokens=False).input_ids.to(device)
         with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16, enabled=(device == "cuda")):
             out = model.generate(ids, max_new_tokens=max_new, do_sample=False, repetition_penalty=1.1, pad_token_id=tok.pad_token_id)
         return tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
@@ -130,12 +139,7 @@ def main():
           "token_f1_vs_reference": round(sum(stats["f1"]) / max(1, len(stats["f1"])), 4),
           "miss_detected": round(sum(stats["miss"]) / max(1, len(stats["miss"])), 4), "n_val": len(val_rows), "minutes": round((time.time() - t0) / 60, 1)}
     print("[hf] held-out:", json.dumps(ev), flush=True)
-    os.makedirs(args.out, exist_ok=True)
-    merged = model.merge_and_unload()
-    merged.half().save_pretrained(args.out, safe_serialization=True)
-    tok.save_pretrained(args.out)
     json.dump({"system": SYSTEM, "eval": ev, "sft": True, "rag": True, "writer": "hf"}, open(os.path.join(args.out, "gramlab.json"), "w"), indent=1)
-    print(f"[hf] saved merged model -> {args.out}", flush=True)
 
 
 if __name__ == "__main__":
