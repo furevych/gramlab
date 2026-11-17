@@ -263,7 +263,7 @@ class BM25Index:
         self.title_matches(" ".join(terms))                     # builds the title index on first use
         top = float(scores.max()) + 1.0
         for i, cov in self.title_coverage([t for t in terms if t in self.vocab]).items():
-            scores[i] += top * cov * (2.0 if "(" not in self.titles[i] else 1.0)   # exact title: 2x top; "Paris" > "Paris (album)";
+            scores[i] += top * cov * cov * (2.0 if "(" not in self.titles[i] else 1.0)  # squared: 1/3 of a title adds little   # exact title: 2x top; "Paris" > "Paris (album)";
         for e in exclude:
             scores[e] = 0.0
         kk = min(k, len(scores))
