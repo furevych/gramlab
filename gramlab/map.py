@@ -257,8 +257,8 @@ class HybridRetriever:
         if self.guard:
             from .retrieval import analyze
             terms = [self.index.correct(t) for t in analyze(query)]
-            covered = self.index.title_contains([t for t in terms if t in self.index.vocab])
-            if hits[0][1] in covered and covered[hits[0][1]] >= 1.0:
+            covered = self.index.title_coverage([t for t in terms if t in self.index.vocab])
+            if covered.get(hits[0][1], 0) >= 1.0:
                 return hits[:k]
         if qvec is None:
             qvec = self.enc.encode([self.tag(query)])[0]

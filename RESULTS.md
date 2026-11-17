@@ -244,3 +244,22 @@ and gives compact synonym codes; not a replacement for a 22M dense encoder (teac
 queries. Single-surname questions ("who is churchhill") now land on whichever "Churchill" article uses the word most
 ("Churchill Show", a Kenyan comedy) — a first name fixes it; a popularity prior would be the principled fix.
 The chat notebook prefers this index when the `gramlab-fullwiki` output is attached.
+
+## Run 8 — writer swap, 2026-11-16 (`gramlab-writer` Version 3, T4, 99 min)
+
+Qwen2.5-0.5B-Instruct + LoRA (8.8M trainable of 503M) on the 27k retrieval-conditioned dialogues, 2 epochs (3,382
+steps, 87 min). Held-out 400 dialogues: **faithfulness 0.999** (share of answer words present in the passage),
+**token F1 vs reference 0.987**, miss detection 0.875. Merged fp16 model 954 MB.
+
+Sample answers are exact, clean reads of the passage (Belgrade, Napoleon, Tokyo, Einstein, photosynthesis — no
+spelling slips, unlike the 25M writer) and "I don't have information about …" whenever retrieval misses. Which now
+makes retrieval the only visible weakness: "When was Albert Einstein born?" fetched "Albert Einstein Square", "Which
+river flows through Vienna?" fetched "River Cole, West Midlands", because the partial-title rule required *all* query
+words in the title. Replaced after the run by a coverage score — (shared words / title words) × (shared words / query
+words) — so "Albert Einstein" (0.67) beats "Albert Einstein Square" (0.44) and "Vienna" gets boosted for the river
+question; exact titles still score 1 and plain titles still beat disambiguated ones. Applies at chat time.
+
+Two earlier attempts failed for environment reasons (Kaggle's old `torchao` next to current `transformers`; then
+`apply_chat_template` returning a dict), costing ~1.5 GPU-hours; the model is now saved before evaluation.
+
+**Level 1 is done**: 0.5B writer + BM25 over all of English Wikipedia (+ the slot-map hybrid on the 659k index).

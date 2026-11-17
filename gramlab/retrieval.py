@@ -218,22 +218,25 @@ class BM25Index:
                 self._title_index.setdefault(self._title_key(t), []).append(i)
         return self._title_index.get(tuple(sorted(set(analyze(query)))), [])
 
-    def title_contains(self, terms):
-        """Passages whose title contains all the query's content words ("churchill" -> "Winston Churchill"),
-        with the share of the title the query covers: 1.0 for an exact title, 0.5 for one word of two."""
+    def title_coverage(self, terms):
+        """How well each title explains the query: (shared words / title words) x (shared words / query words).
+        "When was Albert Einstein born?" -> "Albert Einstein" 0.67, "Albert Einstein Square" 0.44, "Einstein" 0.33;
+        an exact title scores 1. Candidates are titles sharing at least one content word with the query."""
         if getattr(self, "_title_terms", None) is None:
             self._title_terms = {}
             for key, idxs in self._title_index.items():
                 for term in key:
                     self._title_terms.setdefault(term, []).extend(idxs)
         qs = set(terms)
-        cands = None
+        shared = {}
         for term in qs:
-            lst = set(self._title_terms.get(term, []))
-            cands = lst if cands is None else cands & lst
-            if not cands:
-                return {}
-        return {i: len(qs) / max(1, len(self._title_key(self.titles[i]))) for i in cands}
+            for i in self._title_terms.get(term, []):
+                shared[i] = shared.get(i, 0) + 1
+        out = {}
+        for i, n in shared.items():
+            klen = len(self._title_key(self.titles[i]))
+            out[i] = (n / max(1, klen)) * (n / max(1, len(qs)))
+        return out
 
     def correct(self, term: str):
         """A query word that is not in the index -> the most frequent index term within one edit
@@ -257,14 +260,10 @@ class BM25Index:
         if not ids:
             return []
         scores = np.asarray(self.W[:, ids].sum(axis=1)).ravel()
-        exact = self.title_matches(" ".join(terms))
+        self.title_matches(" ".join(terms))                     # builds the title index on first use
         top = float(scores.max()) + 1.0
-        if exact:                                               # "Paris" > "Paris (Paris Hilton album)"
-            for i in exact:
-                scores[i] += top * (2.0 if "(" not in self.titles[i] else 1.0)
-        else:                                                   # no article with exactly these words: prefer titles that
-            for i, share in self.title_contains([t for t in terms if t in self.vocab]).items():   # contain them all,
-                scores[i] += top * share * (2.0 if "(" not in self.titles[i] else 1.0)         # "churchill" -> "Winston Churchill"
+        for i, cov in self.title_coverage([t for t in terms if t in self.vocab]).items():
+            scores[i] += top * cov * (2.0 if "(" not in self.titles[i] else 1.0)   # exact title: 2x top; "Paris" > "Paris (album)";
         for e in exclude:
             scores[e] = 0.0
         kk = min(k, len(scores))
