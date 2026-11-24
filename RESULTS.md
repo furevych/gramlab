@@ -398,3 +398,23 @@ as before; the linker and key rows are unchanged (0.884 / 0.830 / 0.708).
 **Kaggle confirmation (`gramlab-core` Version 1, CPU, 202 s, 2026-11-24):** every row above reproduced to the third
 decimal from a fresh clone (linker 0.887 / backfill 0.884, key exact 0.830 / 0.708, WordNet coverage 0.992 / 0.982,
 SemCor 62.4 / 72.9). The whole scoreboard costs no GPU quota and about three minutes.
+
+### Run 9e — coreference for pronoun slots, 2026-11-24 (local CPU, 12 s for the row)
+
+GUM's `Entity=` layer carries gold chains, so the benchmark is fixed: for each third-person pronoun that is an event
+argument on GUM test (468; the 560 *I/you/we* arguments are speaker references and are skipped by design), is the
+predicted antecedent in the same gold chain?
+
+| resolver | accuracy |
+|---|---:|
+| nearest preceding nominal | 14.3 |
+| nearest nominal agreeing in type and number | 28.2 |
+| agreeing subject first (and the same pronoun just before = same referent) | 47.2 |
+| **mention-pair ranker** (hashed logistic over pronoun–candidate pairs, GUM train chains, alpha on dev) | **54.9** |
+| candidate ceiling (antecedent within 3 sentences, pronouns allowed as antecedents) | 75.4 |
+
+Two things decided the numbers: candidates must include earlier *pronouns* (chains like *he … he*; the ceiling with
+nouns only is 58.5%), and training on the closest same-chain mention only. The ranker is the occupant: in the keyer a
+pronoun slot now takes its antecedent's kind, class and id, following pronoun→pronoun links until a nominal (≤4 hops).
+On GUM test 601 of 651 third-person pronoun slots reach a nominal, and the specific-key count rises from 1,960 to
+2,031 because identities now differ where before everything was "pronoun". The linker and key rows are unchanged.

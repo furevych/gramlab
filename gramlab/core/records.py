@@ -32,6 +32,8 @@ class Sentence:
     deprels: list
     ents: list                      # entity type opened at this token (annotation), or None
     doc: str = ""
+    ents_raw: list = field(default_factory=list, repr=False)   # raw Entity= field per token (coreference chains)
+    feats: list = field(default_factory=list, repr=False)      # UD FEATS per token
     children: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -148,16 +150,20 @@ def read_conllu(path, limit=None):
 
 
 def _make(sid, doc, rows):
-    ents = []
+    ents, raw = [], []
     for c in rows:
         e = None
+        r = ""
         if len(c) > 9 and "Entity=" in c[9]:
-            m = _ENTITY_RE.search(c[9].split("Entity=", 1)[1].split("|")[0])
+            r = c[9].split("Entity=", 1)[1].split("|")[0]
+            m = _ENTITY_RE.search(r)
             if m:
                 e = m.group(2)
         ents.append(e)
+        raw.append(r)
     return Sentence(sid, [c[1] for c in rows], [c[2] for c in rows], [c[3] for c in rows],
-                    [c[4] for c in rows], [int(c[6]) - 1 for c in rows], [c[7] for c in rows], ents, doc)
+                    [c[4] for c in rows], [int(c[6]) - 1 for c in rows], [c[7] for c in rows], ents, doc,
+                    ents_raw=raw, feats=[c[5] for c in rows])
 
 
 def read_conllu_glob(pattern, limit_sents=None, seed=0):

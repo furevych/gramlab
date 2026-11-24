@@ -25,10 +25,11 @@ class MeaningIndex:
         self.records: list[Occurrence] = []
         self.postings = defaultdict(list)   # (level, key, status) -> [occurrence ids]
 
-    def add(self, s: Sentence, events: list[Event]):
+    def add(self, s: Sentence, events: list[Event], context=None):
+        """context = (sents, si) lets the keyer resolve pronouns to earlier mentions."""
         ids = []
         for e in events:
-            sk, fks = self.keyer.specific_key(e), self.keyer.family_keys(e, s)
+            sk, fks = self.keyer.specific_key(e, context), self.keyer.family_keys(e, s, context)
             occ = Occurrence(e, s.text(), s.doc, s.sid, sk, fks[0])
             i = len(self.records)
             self.records.append(occ)

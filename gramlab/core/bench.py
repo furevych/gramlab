@@ -216,8 +216,8 @@ def bench_affect(affect: Affect, sents):
 
 
 # ----------------------------------------------------------------------------- index
-def bench_index(pipe: Pipeline, sents, sense_picker=None):
-    gold_pipe = Pipeline(linker=GoldLinker(), general=pipe.general, specific=pipe.specific, sense_picker=sense_picker)
+def bench_index(pipe: Pipeline, sents, sense_picker=None, resolver=None):
+    gold_pipe = Pipeline(linker=GoldLinker(), general=pipe.general, specific=pipe.specific, sense_picker=sense_picker, resolver=resolver)
     n = gold_pipe.ingest(sents)
     st = gold_pipe.index.stats()
     per_family = Counter(k for (lvl, k, _) in gold_pipe.index.postings if lvl == "family")
@@ -227,8 +227,31 @@ def bench_index(pipe: Pipeline, sents, sense_picker=None):
         if lvl == "family":
             biggest.append((gold_pipe.keyer.decode(k), status, len(v)))
     return {"occurrences": n, **st, "family_postings_top": biggest,
+            "pronoun_slots_resolved_to_nominal": gold_pipe.keyer.resolved, "pronoun_slots_unresolved": gold_pipe.keyer.unresolved,
             "family_posting_sizes_p50_p90_max": [sizes[len(sizes) // 2], sizes[len(sizes) // 10], sizes[0]] if sizes else [],
             "specific_registry": gold_pipe.specific.stats()}
+
+
+# ----------------------------------------------------------------------------- coreference
+def bench_coreference(sents, train=None, dev=None):
+    """Returns the row and, under "_resolver", the trained ranker (alpha chosen on dev, refit on train+dev)."""
+    from .coref import NearestNominal, RankedResolver, SubjectFirst, TypedNearest, bench_coref
+    resolvers = [NearestNominal(), TypedNearest(), SubjectFirst()]
+    rr = None
+    if train is not None:
+        t = time.time()
+        alpha = 1e-5
+        if dev is not None:
+            best = max(((a, bench_coref(RankedResolver(alpha=a).fit(train), dev, predicates)["accuracy"]) for a in (3e-6, 1e-5, 3e-5, 1e-4)),
+                       key=lambda x: x[1])
+            alpha = best[0]
+        rr = RankedResolver(alpha=alpha).fit(train + (dev or []))
+        resolvers.append(rr)
+    out = {r.name: bench_coref(r, sents, predicates) for r in resolvers}
+    if rr is not None:
+        out[rr.name].update({"fit_seconds": round(time.time() - t, 1), "train_pairs": rr.n_pairs, "alpha": rr.alpha})
+        out["_resolver"] = rr
+    return out
 
 
 # ----------------------------------------------------------------------------- run
@@ -298,10 +321,13 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     board["general"] = bench_general(general, gum_test)
     board["affect"] = bench_affect(affect, gum_test)
     board["senses"] = bench_senses(general, semcor)
+    board["coreference"] = bench_coreference(gum_test, gum_train, gum_dev)
+    resolver = board["coreference"].pop("_resolver", None)
     picker = board["senses"].pop("_picker", None)
-    board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test, picker)
+    board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test, picker, resolver)
     board["index"]["sense_picker"] = getattr(picker, "name", None)
-    for k in ("typing", "general", "affect", "senses", "index"):
+    board["index"]["resolver"] = getattr(resolver, "name", None)
+    for k in ("typing", "general", "affect", "senses", "coreference", "index"):
         print(k, json.dumps(board[k], default=str))
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
