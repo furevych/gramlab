@@ -193,7 +193,7 @@ def bench_sense(pickers: dict, sents, wn: WordNet, poses=("v", "n")):
     for name, pk in pickers.items():
         res = {}
         for pos in poses:
-            n = ok = 0
+            items, golds = [], []
             for s in sents:
                 for i, t in enumerate(s):
                     if t["gold"] is None or t["pos"] != pos:
@@ -201,8 +201,166 @@ def bench_sense(pickers: dict, sents, wn: WordNet, poses=("v", "n")):
                     ss = wn.synsets(t["lemma"], pos)
                     if len(ss) < 2 or t["gold"] not in ss:
                         continue
-                    n += 1
-                    ok += pk.pick(t["lemma"], pos, s, i) == t["gold"]
-            res[pos] = {"n": n, "accuracy": round(ok / max(n, 1), 4)}
+                    items.append((t["lemma"], pos, s, i))
+                    golds.append(t["gold"])
+            if hasattr(pk, "pick_batch"):
+                preds = pk.pick_batch(items)
+            else:
+                preds = [pk.pick(*it) for it in items]
+            ok = sum(p == g for p, g in zip(preds, golds))
+            res[pos] = {"n": len(items), "accuracy": round(ok / max(len(items), 1), 4)}
         out[name] = res
     return out
+
+
+# ----------------------------------------------------------------------------- shared rank classifier
+class RankPicker:
+    """One model per POS, shared across lemmas: features conjoined with the lemma predict the *rank* of the
+    sense in WordNet order (0 = first sense), so the model starts from the first-sense prior and corrects it
+    from context. Hashed logistic regression (SGD). Lemmas unseen in training fall back to rank 0.
+    alpha is chosen on a dev split (brownv), never on the test split."""
+    name = "shared rank classifier (SemCor)"
+    N = 1 << 21
+    MAXR = 8
+
+    def __init__(self, wn: WordNet, poses=("v",), alphas=(2e-5, 5e-5, 1e-4, 3e-4), epochs=10, seed=0):
+        self.wn = wn
+        self.poses = poses
+        self.alphas = alphas
+        self.epochs = epochs
+        self.seed = seed
+        self.clf = {}
+        self.alpha = {}
+        self.seen = {}
+        self._cache = {}
+
+    def _hid(self, f):
+        x = self._cache.get(f)
+        if x is None:
+            import hashlib
+            x = int(hashlib.blake2b(f.encode(), digest_size=4).hexdigest(), 16) % self.N
+            if len(self._cache) < 4_000_000:
+                self._cache[f] = x
+        return x
+
+    def features(self, sent, i, lemma, pos):
+        L = lemma + "/" + pos
+        out = [f"{L}|bias"]
+        for d in range(-5, 6):
+            j = i + d
+            if d == 0 or j < 0 or j >= len(sent):
+                continue
+            l = sent[j]["lemma"]
+            t = sent[j].get("tag", "")[:2]
+            if l and l not in STOP:
+                out.append(f"{L}|w={l}")
+                out.append(f"{pos}|w={l}")
+            if abs(d) <= 2:
+                out.append(f"{L}|w{d}={l}")
+                out.append(f"{L}|t{d}={t}")
+        return out
+
+    def _build(self, sents, pos, train_mode):
+        import numpy as np
+        from scipy import sparse
+        rows, cols, y, meta = [], [], [], []
+        r = 0
+        for s in sents:
+            for i, t in enumerate(s):
+                if t["gold"] is None or t["pos"] != pos:
+                    continue
+                ss = self.wn.synsets(t["lemma"], pos)
+                if len(ss) < 2 or t["gold"] not in ss:
+                    continue
+                rank = ss.index(t["gold"])
+                if train_mode and rank >= self.MAXR:
+                    continue
+                for f in self.features(s, i, t["lemma"], pos):
+                    rows.append(r)
+                    cols.append(self._hid(f))
+                y.append(min(rank, self.MAXR - 1))
+                meta.append((t["lemma"], len(ss), rank))
+                r += 1
+        X = sparse.csr_matrix((np.ones(len(rows), dtype=np.float32), (rows, cols)), shape=(r, self.N))
+        X.sum_duplicates()
+        return X, np.array(y), meta
+
+    def _acc(self, clf, X, meta, seen):
+        import numpy as np
+        P = clf.predict_proba(X)
+        ok = 0
+        for k, (lemma, nss, gold) in enumerate(meta):
+            pred = 0 if seen.get(lemma, 0) < 1 else int(np.argmax(P[k][:min(nss, self.MAXR)]))
+            ok += pred == gold
+        return ok / max(len(meta), 1)
+
+    def fit(self, train, dev=None):
+        from sklearn.linear_model import SGDClassifier
+        for pos in self.poses:
+            self.seen[pos] = Counter(t["lemma"] for s in train for t in s if t["gold"] and t["pos"] == pos)
+            Xtr, ytr, _ = self._build(train, pos, True)
+            best = None
+            dev_pos = dev if dev is not None and any(t["gold"] and t["pos"] == pos for s_ in dev for t in s_) else None
+            if dev_pos is None and len(self.alphas) > 1:
+                cut = int(len(train) * 0.9)
+                train, dev_pos = train[:cut], train[cut:]          # held-out slice of train for this POS
+            if dev_pos is not None and len(self.alphas) > 1:
+                dev = dev_pos
+                Xtr, ytr, _ = self._build(train, pos, True)
+                self.seen[pos] = Counter(t["lemma"] for s_ in train for t in s_ if t["gold"] and t["pos"] == pos)
+                Xdv, _, mdv = self._build(dev, pos, False)
+                for a in self.alphas:
+                    clf = SGDClassifier(loss="log_loss", alpha=a, max_iter=self.epochs, tol=None, random_state=self.seed).fit(Xtr, ytr)
+                    acc = self._acc(clf, Xdv, mdv, self.seen[pos])
+                    if best is None or acc > best[0]:
+                        best = (acc, a)
+                a = best[1]
+                # refit on train + dev with the chosen alpha
+                Xall, yall, _ = self._build(train + dev, pos, True)
+                self.seen[pos] = Counter(t["lemma"] for s in train + dev for t in s if t["gold"] and t["pos"] == pos)
+                self.clf[pos] = SGDClassifier(loss="log_loss", alpha=a, max_iter=self.epochs, tol=None, random_state=self.seed).fit(Xall, yall)
+            else:
+                a = self.alphas[0]
+                self.clf[pos] = SGDClassifier(loss="log_loss", alpha=a, max_iter=self.epochs, tol=None, random_state=self.seed).fit(Xtr, ytr)
+            self.alpha[pos] = a
+        return self
+
+    def pick_batch(self, items):
+        """items: list of (lemma, pos, sent, i) -> list of synsets; one matrix per POS."""
+        import numpy as np
+        from scipy import sparse
+        out = [None] * len(items)
+        by_pos = defaultdict(list)
+        for k, (lemma, pos, sent, i) in enumerate(items):
+            ss = self.wn.synsets(lemma, pos)
+            if not ss:
+                continue
+            if pos not in self.clf or self.seen[pos].get(lemma, 0) < 1 or len(ss) < 2:
+                out[k] = ss[0]
+            else:
+                by_pos[pos].append((k, ss))
+        for pos, rows_ in by_pos.items():
+            rows, cols = [], []
+            for r, (k, ss) in enumerate(rows_):
+                lemma, _, sent, i = items[k]
+                for f in self.features(sent, i, lemma, pos):
+                    rows.append(r)
+                    cols.append(self._hid(f))
+            X = sparse.csr_matrix((np.ones(len(rows), dtype=np.float32), (rows, cols)), shape=(len(rows_), self.N))
+            P = self.clf[pos].predict_proba(X)
+            for r, (k, ss) in enumerate(rows_):
+                out[k] = ss[int(np.argmax(P[r][:min(len(ss), self.MAXR)]))]
+        return out
+
+    def pick(self, lemma, pos, sent, i):
+        import numpy as np
+        ss = self.wn.synsets(lemma, pos)
+        if not ss:
+            return None
+        if pos not in self.clf or self.seen[pos].get(lemma, 0) < 1 or len(ss) < 2:
+            return ss[0]
+        from scipy import sparse
+        cols = [self._hid(f) for f in self.features(sent, i, lemma, pos)]
+        X = sparse.csr_matrix((np.ones(len(cols), dtype=np.float32), ([0] * len(cols), cols)), shape=(1, self.N))
+        p = self.clf[pos].predict_proba(X)[0]
+        return ss[int(np.argmax(p[:min(len(ss), self.MAXR)]))]

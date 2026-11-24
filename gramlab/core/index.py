@@ -28,7 +28,7 @@ class MeaningIndex:
     def add(self, s: Sentence, events: list[Event]):
         ids = []
         for e in events:
-            sk, fks = self.keyer.specific_key(e), self.keyer.family_keys(e)
+            sk, fks = self.keyer.specific_key(e), self.keyer.family_keys(e, s)
             occ = Occurrence(e, s.text(), s.doc, s.sid, sk, fks[0])
             i = len(self.records)
             self.records.append(occ)

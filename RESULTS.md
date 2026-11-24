@@ -374,3 +374,23 @@ every link is a real shared sense; the cost is fan-out, which stays small (no hu
 `Keyer.family_keys()`; `MeaningIndex` posts under all of them and `related()` unions them. The GUM-test index now has
 4,085 family postings for 2,308 occurrences (p90 posting size 2, max 33). k is a tunable the sense picker will later
 make unnecessary.
+
+### Run 9d — a sense picker that clears the bar for verbs, 2026-11-24 (local CPU, 28 s for the whole row)
+
+Per-lemma models starve (most lemmas have a handful of SemCor examples), so the picker is **one shared model per POS**:
+hashed logistic regression whose features are conjoined with the lemma (`wash|w=dish`, `wash|w-1=the`, …) and whose
+label is the sense's *rank* in WordNet order. It therefore starts from the first-sense prior and corrects it from
+context; lemmas unseen in training back off to rank 0. Train brown1, alpha chosen on brownv (verbs) or a held-out
+slice of brown1 (nouns), one score on brown2:
+
+| picker | verbs (n=20,034) | nouns (n=31,411) |
+|---|---:|---:|
+| first sense (WordNet order; saw the test set) | 59.7 | 74.4 |
+| extended Lesk | 43.5 | 62.5 |
+| per-lemma naive Bayes | 56.8 | 59.1 |
+| **shared rank classifier** | **62.4** | 72.9 |
+
+Verbs clear the bar by 2.7 points with an 18-second training run; nouns do not, so the core uses the picker for verbs
+only and first sense for nouns. In the keyer the chosen sense now leads an event's family postings (the other two
+top-ranked senses still follow, run 9c), and it is the occurrence's `family_key`. 4,085 family postings on GUM test
+as before; the linker and key rows are unchanged (0.884 / 0.830 / 0.708).

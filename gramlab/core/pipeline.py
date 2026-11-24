@@ -27,10 +27,10 @@ class ConlluParser:
 
 
 class Pipeline:
-    def __init__(self, linker=None, general=None, specific=None, affect=None, retriever=None, writer=None):
+    def __init__(self, linker=None, general=None, specific=None, affect=None, retriever=None, writer=None, sense_picker=None):
         self.general = general or GeneralIndex()
         self.specific = specific or SpecificIndex()
-        self.keyer = Keyer(self.general, self.specific)
+        self.keyer = Keyer(self.general, self.specific, sense_picker=sense_picker)
         self.linker = linker or RuleLinker()
         self.affect = affect or Affect()
         self.index = MeaningIndex(self.keyer, retriever)
@@ -67,5 +67,5 @@ class Pipeline:
     def components(self):
         return {"core": self.version, "linker": getattr(self.linker, "name", type(self.linker).__name__),
                 "general_index": self.general.backend, "specific_seed": len(self.specific.seed),
-                "affect": self.affect.source, "retriever": type(self.index.retriever).__name__ if self.index.retriever else None,
+                "affect": self.affect.source, "sense_picker": getattr(self.keyer.sense_picker, "name", None), "retriever": type(self.index.retriever).__name__ if self.index.retriever else None,
                 "writer": type(self.writer).__name__ if self.writer else None}

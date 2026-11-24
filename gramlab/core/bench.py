@@ -216,8 +216,8 @@ def bench_affect(affect: Affect, sents):
 
 
 # ----------------------------------------------------------------------------- index
-def bench_index(pipe: Pipeline, sents):
-    gold_pipe = Pipeline(linker=GoldLinker(), general=pipe.general, specific=pipe.specific)
+def bench_index(pipe: Pipeline, sents, sense_picker=None):
+    gold_pipe = Pipeline(linker=GoldLinker(), general=pipe.general, specific=pipe.specific, sense_picker=sense_picker)
     n = gold_pipe.ingest(sents)
     st = gold_pipe.index.stats()
     per_family = Counter(k for (lvl, k, _) in gold_pipe.index.postings if lvl == "family")
@@ -235,13 +235,19 @@ def bench_index(pipe: Pipeline, sents):
 def bench_senses(general: GeneralIndex, semcor_dir):
     if general._wn is None or not semcor_dir or not Path(semcor_dir, "brown2").exists():
         return {"status": "skipped (needs WordNet files and --semcor dir)"}
-    from .sense import FirstSense, LeskPicker, NaiveBayesPicker, bench_sense, read_semcor
+    from .sense import FirstSense, LeskPicker, NaiveBayesPicker, RankPicker, bench_sense, read_semcor
     wn = general._wn
-    train = read_semcor(semcor_dir, wn, ("brown1", "brownv"))
+    train = read_semcor(semcor_dir, wn, ("brown1",))
+    dev = read_semcor(semcor_dir, wn, ("brownv",))
     test = read_semcor(semcor_dir, wn, ("brown2",))
-    nb = NaiveBayesPicker(wn, alpha=3.0).fit(train)
+    nb = NaiveBayesPicker(wn, alpha=3.0).fit(train + dev)
+    t = time.time()
+    rank = RankPicker(wn, poses=("v", "n")).fit(train, dev)
+    fit_s = time.time() - t
     r = bench_sense({"first sense (WordNet order)": FirstSense(wn), "extended Lesk": LeskPicker(wn),
-                     "naive Bayes, SemCor-trained": nb}, test, wn)
+                     "naive Bayes, SemCor-trained": nb, "shared rank classifier (SemCor)": rank}, test, wn)
+    r["shared rank classifier (SemCor)"]["alpha"] = rank.alpha
+    r["shared rank classifier (SemCor)"]["fit_seconds"] = round(fit_s, 1)
     r["note"] = "WordNet's sense order was derived from SemCor counts, so 'first sense' has seen the test set; a picker must beat it anyway"
     return r
 
@@ -289,7 +295,9 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     board["general"] = bench_general(general, gum_test)
     board["affect"] = bench_affect(affect, gum_test)
     board["senses"] = bench_senses(general, semcor)
-    board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test)
+    picker = board["senses"].pop("_picker", None)
+    board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test, picker)
+    board["index"]["sense_picker"] = getattr(picker, "name", None)
     for k in ("typing", "general", "affect", "senses", "index"):
         print(k, json.dumps(board[k], default=str))
     if out_dir:

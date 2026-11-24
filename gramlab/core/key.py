@@ -29,11 +29,17 @@ class Slot:
 
 
 class Keyer:
-    def __init__(self, general: GeneralIndex, specific: SpecificIndex, senses=3):
+    def __init__(self, general: GeneralIndex, specific: SpecificIndex, senses=3, sense_picker=None):
         self.general = general
         self.specific = specific
         self.senses = senses          # family postings: top-k senses of the action (run 9c)
+        self.sense_picker = sense_picker   # layer-1 picker (core.sense.RankPicker); chosen sense leads the postings
         self.table = {}     # key id -> readable tuple
+
+    @staticmethod
+    def as_semcor(sent):
+        """Sentence -> the token dicts the sense picker's features read."""
+        return [{"lemma": l.lower(), "tag": x, "pos": None, "gold": None} for l, x in zip(sent.lemmas, sent.xpos)]
 
     def slot(self, m: Mention | None) -> Slot:
         if m is None:
@@ -69,12 +75,19 @@ class Keyer:
         self.table[k] = readable
         return k
 
-    def family_keys(self, event: Event) -> list:
-        """One family key per top-k sense of the action: (class(actor), sense, class(patient)).
-        Without a sense picker, posting under several senses links synonyms (wash.v.03 ~ rinse) without
-        collapsing verbs into one wrong hypernym family (run 9b/9c)."""
+    def family_keys(self, event: Event, sent=None) -> list:
+        """One family key per posted sense of the action: (class(actor), sense, class(patient)).
+        Posting under several senses links synonyms (wash.v.03 ~ rinse) without collapsing verbs into one
+        wrong hypernym family (run 9b/9c). With a sense picker and the sentence, the chosen sense comes first
+        and is the occurrence's family_key; the top-k by WordNet order fill the rest."""
         a, p = self.slot(event.actor), self.slot(event.patient)
-        ss = self.general.synsets(event.action, "VERB")[: self.senses]
+        all_ss = self.general.synsets(event.action, "VERB")
+        ss = list(all_ss[: self.senses])
+        if self.sense_picker is not None and sent is not None and len(all_ss) > 1:
+            chosen = self.sense_picker.pick(event.action, "v", self.as_semcor(sent), event.verb)
+            if chosen is not None:
+                chosen = ("v", chosen) if not isinstance(chosen, tuple) else chosen
+                ss = [chosen] + [x for x in ss if x != chosen][: max(self.senses - 1, 0)]
         names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
         keys = []
         for name in names:
