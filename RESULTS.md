@@ -394,3 +394,7 @@ Verbs clear the bar by 2.7 points with an 18-second training run; nouns do not, 
 only and first sense for nouns. In the keyer the chosen sense now leads an event's family postings (the other two
 top-ranked senses still follow, run 9c), and it is the occurrence's `family_key`. 4,085 family postings on GUM test
 as before; the linker and key rows are unchanged (0.884 / 0.830 / 0.708).
+
+**Kaggle confirmation (`gramlab-core` Version 1, CPU, 202 s, 2026-11-24):** every row above reproduced to the third
+decimal from a fresh clone (linker 0.887 / backfill 0.884, key exact 0.830 / 0.708, WordNet coverage 0.992 / 0.982,
+SemCor 62.4 / 72.9). The whole scoreboard costs no GPU quota and about three minutes.

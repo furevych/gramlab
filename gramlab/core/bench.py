@@ -249,6 +249,9 @@ def bench_senses(general: GeneralIndex, semcor_dir):
     r["shared rank classifier (SemCor)"]["alpha"] = rank.alpha
     r["shared rank classifier (SemCor)"]["fit_seconds"] = round(fit_s, 1)
     r["note"] = "WordNet's sense order was derived from SemCor counts, so 'first sense' has seen the test set; a picker must beat it anyway"
+    rank.poses = ("v",)                      # the occupant picks verbs only; nouns stay first-sense in the keyer
+    rank.clf.pop("n", None)
+    r["_picker"] = rank
     return r
 
 
