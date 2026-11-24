@@ -349,3 +349,28 @@ three different depth-2 families while *murder → kill* merge correctly. WordNe
 text (the word codes) and scored on an external paraphrase set. Core default is now depth 0: the key never merges
 wrongly, and merging is a layer-1 result still to be earned. With depth 0 the GUM-test index has 1,188 family keys
 for 2,308 occurrences (p90 posting size 3, max 48: *person travel.v.01 —*), i.e. still mostly one occurrence per key.
+
+### Run 9c — senses and multi-sense families, 2026-11-24 (local CPU, minutes)
+
+**Sense picker benchmark (SemCor brown2, lemmas with ≥2 senses):** first sense 59.7% verbs / 74.4% nouns;
+extended Lesk 43.5 / 62.5; per-lemma naive Bayes trained on brown1+brownv 56.8 / 59.1. Nothing cheap beats first
+sense — partly because WordNet's sense order was itself computed from SemCor, so the baseline has seen the test set.
+The slot stays open with the benchmark in place; a real picker (a small context classifier trained on SemCor with
+proper features, or the word codes) has to clear 60/74.
+
+**Families without disambiguation — post under several senses instead of collapsing to one.** An event is posted
+under `(class, sense, class)` for each of the verb's top-k senses; two verbs are linked when they share a posted sense.
+Reference as in 9b (908 synonym verb pairs in GUM test):
+
+| k | synonym pairs linked | links per verb (mean / max) |
+|---:|---:|---|
+| 1 | 7.4% | 0.20 / 3 |
+| **3** | **26.2%** | **0.72 / 7** |
+| 5 | 47.6% | 1.31 / 9 (*set*) |
+| all | 100% | 2.76 / 37 (*take*) |
+
+Against hypernym depth 1 (10.7% linked, 87% of merges unrelated), top-3 senses link 2.5× more synonym pairs and
+every link is a real shared sense; the cost is fan-out, which stays small (no hub above 7). Core default: k = 3,
+`Keyer.family_keys()`; `MeaningIndex` posts under all of them and `related()` unions them. The GUM-test index now has
+4,085 family postings for 2,308 occurrences (p90 posting size 2, max 33). k is a tunable the sense picker will later
+make unnecessary.

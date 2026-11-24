@@ -177,6 +177,20 @@ def bench_general(general: GeneralIndex, sents):
             "merged_pairs": len(merged), "unrelated_share": round(unrelated / max(len(merged), 1), 3),
             "largest": [(f, len(g), g[:6]) for f, g in big]}
     out["synonym_pairs_in_test"] = len(synonym_pairs)
+    # multi-sense posting: an event is posted under each of its verb's top-k synsets; two lemmas are
+    # "linked" when they share a posted synset. Recall on synonym pairs vs fan-out (hub effect).
+    out["multi_sense_postings"] = {}
+    for k in (1, 2, 3, 5, 99):
+        top = {l: set(map(str, general.synsets(l, "VERB")[:k])) for l in lemmas}
+        linked = {(a, b) for i, a in enumerate(lemmas) for b in lemmas[i + 1:] if top[a] & top[b]}
+        fan = Counter()
+        for a, b in linked:
+            fan[a] += 1
+            fan[b] += 1
+        out["multi_sense_postings"][str(k)] = {
+            "synonym_pairs_linked": round(len(linked & synonym_pairs) / max(len(synonym_pairs), 1), 3),
+            "linked_pairs": len(linked), "mean_links_per_verb": round(sum(fan.values()) / len(lemmas), 2),
+            "max_links": max(fan.values()) if fan else 0, "hub": fan.most_common(1)[0][0] if fan else None}
     return out
 
 
@@ -218,7 +232,21 @@ def bench_index(pipe: Pipeline, sents):
 
 
 # ----------------------------------------------------------------------------- run
-def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=None, linker_path=None, seed=0):
+def bench_senses(general: GeneralIndex, semcor_dir):
+    if general._wn is None or not semcor_dir or not Path(semcor_dir, "brown2").exists():
+        return {"status": "skipped (needs WordNet files and --semcor dir)"}
+    from .sense import FirstSense, LeskPicker, NaiveBayesPicker, bench_sense, read_semcor
+    wn = general._wn
+    train = read_semcor(semcor_dir, wn, ("brown1", "brownv"))
+    test = read_semcor(semcor_dir, wn, ("brown2",))
+    nb = NaiveBayesPicker(wn, alpha=3.0).fit(train)
+    r = bench_sense({"first sense (WordNet order)": FirstSense(wn), "extended Lesk": LeskPicker(wn),
+                     "naive Bayes, SemCor-trained": nb}, test, wn)
+    r["note"] = "WordNet's sense order was derived from SemCor counts, so 'first sense' has seen the test set; a picker must beat it anyway"
+    return r
+
+
+def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=None, linker_path=None, seed=0, semcor=None):
     gum_dir = Path(gum_dir)
     gum_train = read_conllu(gum_dir / "en_gum-ud-train.conllu")
     gum_dev = read_conllu(gum_dir / "en_gum-ud-dev.conllu")
@@ -260,8 +288,9 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     board["typing"] = bench_typing(typer, gum_test)
     board["general"] = bench_general(general, gum_test)
     board["affect"] = bench_affect(affect, gum_test)
+    board["senses"] = bench_senses(general, semcor)
     board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test)
-    for k in ("typing", "general", "affect", "index"):
+    for k in ("typing", "general", "affect", "senses", "index"):
         print(k, json.dumps(board[k], default=str))
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -288,8 +317,9 @@ def main(argv=None):
     ap.add_argument("--out", default="results")
     ap.add_argument("--train_limit", type=int, default=None)
     ap.add_argument("--linker", default=None)
+    ap.add_argument("--semcor", default=None)
     a = ap.parse_args(argv)
-    run(a.gum, a.amalgum, a.vad, a.out, a.train_limit, a.linker)
+    run(a.gum, a.amalgum, a.vad, a.out, a.train_limit, a.linker, semcor=a.semcor)
 
 
 if __name__ == "__main__":

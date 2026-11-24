@@ -29,9 +29,10 @@ class Slot:
 
 
 class Keyer:
-    def __init__(self, general: GeneralIndex, specific: SpecificIndex):
+    def __init__(self, general: GeneralIndex, specific: SpecificIndex, senses=3):
         self.general = general
         self.specific = specific
+        self.senses = senses          # family postings: top-k senses of the action (run 9c)
         self.table = {}     # key id -> readable tuple
 
     def slot(self, m: Mention | None) -> Slot:
@@ -67,6 +68,21 @@ class Keyer:
         k = stable_id("fam", *readable)
         self.table[k] = readable
         return k
+
+    def family_keys(self, event: Event) -> list:
+        """One family key per top-k sense of the action: (class(actor), sense, class(patient)).
+        Without a sense picker, posting under several senses links synonyms (wash.v.03 ~ rinse) without
+        collapsing verbs into one wrong hypernym family (run 9b/9c)."""
+        a, p = self.slot(event.actor), self.slot(event.patient)
+        ss = self.general.synsets(event.action, "VERB")[: self.senses]
+        names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
+        keys = []
+        for name in names:
+            readable = (a.cls, name, p.cls)
+            k = stable_id("fam", *readable)
+            self.table[k] = readable
+            keys.append(k)
+        return keys
 
     def class_triple(self, event: Event):
         """(class(actor), action lemma, class(patient)) — the benchmark's comparable form."""

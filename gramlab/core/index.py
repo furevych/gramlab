@@ -28,12 +28,13 @@ class MeaningIndex:
     def add(self, s: Sentence, events: list[Event]):
         ids = []
         for e in events:
-            sk, fk = self.keyer.specific_key(e), self.keyer.family_key(e)
-            occ = Occurrence(e, s.text(), s.doc, s.sid, sk, fk)
+            sk, fks = self.keyer.specific_key(e), self.keyer.family_keys(e)
+            occ = Occurrence(e, s.text(), s.doc, s.sid, sk, fks[0])
             i = len(self.records)
             self.records.append(occ)
             self.postings[("specific", sk, e.status)].append(i)
-            self.postings[("family", fk, e.status)].append(i)
+            for fk in fks:
+                self.postings[("family", fk, e.status)].append(i)
             ids.append(i)
         return ids
 
@@ -41,9 +42,16 @@ class MeaningIndex:
         return [self.records[i] for i in self.postings.get((level, key, status), ())]
 
     def related(self, e: Event, level="family", status=None):
-        k = self.keyer.family_key(e) if level == "family" else self.keyer.specific_key(e)
+        ks = self.keyer.family_keys(e) if level == "family" else [self.keyer.specific_key(e)]
         statuses = (status,) if status else ("asserted", "negated", "possible")
-        return [self.records[i] for st in statuses for i in self.postings.get((level, k, st), ())]
+        seen, out = set(), []
+        for k in ks:
+            for st in statuses:
+                for i in self.postings.get((level, k, st), ()):
+                    if i not in seen:
+                        seen.add(i)
+                        out.append(self.records[i])
+        return out
 
     def search(self, text: str, k=5):
         if self.retriever is None:

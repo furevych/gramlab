@@ -62,7 +62,8 @@ class WordNet:
                 for line in f:
                     if line.startswith(" "):
                         continue
-                    head = line.split("|")[0].split()
+                    body, _, gloss = line.partition("|")
+                    head = body.split()
                     off, lexf = int(head[0]), int(head[1])
                     n_words = int(head[3], 16)
                     words = [head[4 + 2 * i] for i in range(n_words)]
@@ -72,7 +73,15 @@ class WordNet:
                     for k in range(n_ptr):
                         sym, poff, ppos = head[i + 1 + 4 * k], head[i + 2 + 4 * k], head[i + 3 + 4 * k]
                         ptrs.append((sym, int(poff), ppos))
-                    self.data[pos, off] = (lexf, words, ptrs)
+                    self.data[pos, off] = (lexf, words, ptrs, gloss.strip())
+        self.sensekeys = {}
+        sk = path / "index.sense"
+        if sk.exists():
+            with open(sk, encoding="utf-8") as f:
+                for line in f:
+                    p = line.split()
+                    if len(p) >= 2:
+                        self.sensekeys[p[0]] = int(p[1])
 
     def synsets(self, lemma, pos):
         return self.index.get((pos, lemma.lower().replace(" ", "_")), [])
@@ -104,6 +113,12 @@ class WordNet:
                 break
             o = h[0]
         return o
+
+    def gloss(self, pos, off):
+        return self.data[pos, off][3]
+
+    def offset_of_sensekey(self, key):
+        return self.sensekeys.get(key)
 
     def stats(self):
         return {"lemmas": len(self.index), "synsets": len(self.data), "path": str(self.path)}
