@@ -263,3 +263,66 @@ Two earlier attempts failed for environment reasons (Kaggle's old `torchao` next
 `apply_chat_template` returning a dict), costing ~1.5 GPU-hours; the model is now saved before evaluation.
 
 **Level 1 is done**: 0.5B writer + BM25 over all of English Wikipedia (+ the slot-map hybrid on the 659k index).
+
+## Run 9 — core-v1 and the role linker, 2026-11-23/24 (local CPU, 4 min; reproduced by `kaggle_core.ipynb`)
+
+**What changed.** The project got a stable core (`gramlab/core/`, see its README): layer 0 = indexation
+(WordNet concept ids + a specific-entity registry that never guesses identity, VAD lexicon as the fixed affect
+origin), layer 1 = learned components (role linker; entity typing and a live-text parser are open slots), layer 2 =
+the ordered meaning key and index, layer 3 = the writer. One scoreboard (`python -m gramlab.core.bench`), always on
+gold GUM test. The Nov 15–23 notebooks were triaged against it (README, "Triage"): the ordered map, event status
+and the Level-1 retriever/writer were kept as design or code; the regex constructions, hand lexicons, 12–36-sentence
+test sets, EWT baselines and MATRES/clinical pilots were not carried forward.
+
+**Role linker — who did what to whom, learned from real text.** Hashed-feature logistic regression over
+(predicate, candidate) pairs in a ±12-token window, trained on AMALGUM's 191,546 silver-parsed sentences
+(1.49M pairs, 43 s on CPU, 0.9M nonzero weights ≈ 3.6 MB), threshold chosen on GUM dev (0.3), scored once on GUM test
+(1,464 sentences, 2,308 predicates, 234 passive, 24 passive with an explicit agent).
+
+| linker | link F1 all | active | passive | role swaps / 2,308 | µs per sentence |
+|---|---:|---:|---:|---:|---:|
+| word-order rules (tags) | 0.649 | 0.644 | 0.712 | 69 | 20 |
+| word-order rules (words only) | 0.388 | 0.395 | 0.300 | 62 | — |
+| learned, words only (no tagger anywhere) | 0.854 | 0.867 | 0.710 | 29 | 247 |
+| learned, with tags | 0.887 | 0.897 | 0.773 | 12 | 170–210 |
+| **learned + soft backfill** (current occupant) | 0.884 | 0.893 | 0.781 | 12 | 180 |
+| gold UD (ceiling) | 1 | 1 | 1 | 0 | 11 |
+
+Learning curve (with tags, AMALGUM, nested samples; F1 all / passive): 125 sentences 0.648 / 0.304 · 1k 0.776 / 0.448 ·
+10k 0.840 / 0.671 · 100k 0.878 / 0.815 · 191k 0.885 / 0.797. Words only: 0.538 → 0.846. Gold GUM train (11k) gives
+0.848 with tags — 100k silver sentences beat 11k gold ones. For comparison, the parallel EWT thread reached 0.743 with
+gold tags and 0.388 on passives. Role swaps — actor and patient exchanged, the one error the meaning map cannot
+tolerate — fall from 89 (125 sentences) to 12.
+
+**The ordered key on real text** (GUM-test events with both roles, n = 681 active / 24 passive; key =
+(class(actor), verb lemma, class(patient)), classes from the annotation):
+
+| roles from | key exact, active | key exact, passive | reversed keys |
+|---|---:|---:|---:|
+| position only (the toy map's rule: first nominal before = actor, after = patient) | 0.755 | 0.083 | — |
+| word-order rules with passive handling | 0.753 | 0.792 | 0 |
+| learned linker | 0.775 | 0.583 | 0 |
+| **learned + soft backfill** | **0.830** | **0.708** | 0 |
+
+What it says: (1) on active sentences word order already gets three quarters of keys right — grammar buys the rest,
+and buys passives entirely (0.08 → 0.71); (2) no linker ever produced a mirrored key, so the ordered map's failure
+mode is *missing* roles, not swapped ones; (3) the learned model alone under-fills keys because it abstains
+(precision 0.91, recall 0.86); letting it fill the second role from its own next-best candidate when the first is
+confident (p ≥ 0.6, second ≥ 0.1 — first values tried, not tuned) raises key accuracy by 5–12 points at no cost to
+link F1 — the first component swap decided by the scoreboard. (4) 39% of arguments are pronouns; their class comes
+from GUM's coreference annotation here and will be "pronoun" on live text until a coreference component exists.
+
+**Passive agents** (24): 16 correct, 6 agent in window but nothing chosen ("is considered *by many*", "were murdered
+… *by U.S. citizens*"), 1 other token chosen ("praised by the *Berlin* music critic"), 1 outside the window. The fix
+is recall on *by*-phrases, not window size.
+
+**Other rows.** Entity typing prior (lemma majority from GUM train): 59.3% general / 58.1% specific — the row an
+entity typer has to beat (delegated). WordNet coverage: not measured here (nltk absent locally; the Kaggle notebook
+installs it). Affect: skipped (no lexicon file attached). Index over GUM test: 2,308 occurrences, 1,970 specific
+keys, 1,504 family keys; the largest family postings are (person, say/think/go, missing) — intransitives dominate,
+and with families = verb lemma the index is still mostly one occurrence per key, which is why layer 0's hypernym
+families are the next lever.
+
+**Next, in order:** run `kaggle_core.ipynb` for the WordNet rows; entity typer and spaCy parser adapter (delegated,
+scored on the same rows); families from WordNet depth 1–3 vs the word codes, scored by key collisions vs paraphrase
+matches; coreference for pronoun slots (GUM has gold); the VAD lexicon file for the affect row.
