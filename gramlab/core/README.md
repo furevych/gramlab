@@ -13,7 +13,7 @@ question --index.search / index.related--> occurrences --writer--> answer
 
 | layer | module | contract | occupant in core-v1 | benchmark (gold GUM test) |
 |---|---|---|---|---|
-| 0 · indexation | `registry.GeneralIndex` | lemma+POS → concept id, family id (WordNet synset / hypernym at depth *d*) | WordNet via nltk when installed; lemma ids otherwise | coverage of action and argument lemmas |
+| 0 · indexation | `registry.GeneralIndex` | lemma+POS → concept id, family id (WordNet synset / hypernym at depth *d*) | WordNet 3.0 read directly from its files (`core/wordnet.py`, no nltk); lemma ids if the files are absent | coverage of action and argument lemmas; family depth vs synonym merging |
 | 0 · indexation | `registry.SpecificIndex` | name → entity id; seed registry (exact alias) + local ids for unresolved names, identity never guessed | empty seed; local registry | — (size reported) |
 | 0 · origin | `affect.Affect` | action → (valence, arousal, dominance); `force(event)`; power-word corner | file-based lexicon (NRC VAD / Warriner), skipped if absent | coverage, power-event share |
 | 1 · learned | `linker` | `Sentence → [Event]` | `BackfillLinker` = `LearnedLinker` (hashed logistic over predicate–candidate pairs, trained on AMALGUM silver) + its own second-best candidate when one role is confident; `RuleLinker` baseline; `GoldLinker` reads UD | link F1 all/active/passive, role swaps, µs/sentence |
@@ -54,6 +54,6 @@ Not carried forward, and why:
 ## What is deliberately still open
 
 - pronouns: 8% of GUM-test arguments, class `pronoun` in the key — needs a coreference component (GUM has gold);
-- action families: WordNet hypernyms at depth 2 now; the 32-dim word codes (map v1) should propose data-driven families and be scored against the key benchmark;
+- action families: **first-sense hypernym families do not work** (run 9b: depth 1 merges 87% unrelated verb pairs, catches 11% of synonym pairs), so the default family is the synset itself (depth 0). A usable family needs a sense picker (layer 1, scored on SemCor) or data-driven families from the word codes, scored on an external paraphrase set;
 - specific-entity seed: Wikidata-derived JSON (`SpecificIndex.load_seed`) not yet built; the full-Wikipedia index already keys articles by title;
 - live-text parser (task delegated).

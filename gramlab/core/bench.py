@@ -137,19 +137,47 @@ def bench_typing(typer, sents):
 
 # ----------------------------------------------------------------------------- general coverage
 def bench_general(general: GeneralIndex, sents):
+    """Layer-0 coverage, and the family question: at which hypernym depth do action families merge the verbs
+    that WordNet itself calls synonyms (share any synset) without merging unrelated ones?
+    synonym_pairs_merged = recall on synonym lemma pairs; unrelated_share = share of merged pairs with no shared synset."""
     acts, gens = Counter(), Counter()
+    verbs = Counter()
     for s in sents:
         for v, voice, a, p in predicates(s):
-            acts[general.concept(s.lemmas[v], "VERB")["covered"]] += 1
+            c = general.concept(s.lemmas[v], "VERB")
+            acts[c["covered"]] += 1
+            if c["covered"]:
+                verbs[s.lemmas[v].lower()] += 1
             for g in (a, p):
                 if g is not None and s.upos[g] == "NOUN":
                     gens[general.concept(s.lemmas[g], "NOUN")["covered"]] += 1
-    fam = Counter(general.concept(s.lemmas[v], "VERB")["family_name"] for s in sents for v, *_ in predicates(s))
-    return {"backend": general.backend, "family_depth": general.family_depth,
-            "actions_covered": round(acts[True] / max(sum(acts.values()), 1), 4),
-            "general_args_covered": round(gens[True] / max(sum(gens.values()), 1), 4),
-            "distinct_action_lemmas": len({s.lemmas[v].lower() for s in sents for v, *_ in predicates(s)}),
-            "distinct_action_families": len(fam)}
+    out = {"backend": general.backend, "family_depth": general.family_depth,
+           "actions_covered": round(acts[True] / max(sum(acts.values()), 1), 4),
+           "general_args_covered": round(gens[True] / max(sum(gens.values()), 1), 4),
+           "distinct_action_lemmas_covered": len(verbs), "families": {}}
+    if general.backend == "lemma" or not verbs:
+        return out
+    lemmas = sorted(verbs)
+    syn = {l: set(map(str, general.synsets(l, "VERB"))) for l in lemmas}
+    synonym_pairs = {(a, b) for i, a in enumerate(lemmas) for b in lemmas[i + 1:] if syn[a] & syn[b]}
+    for depth in (0, 1, 2, 3, 4, "lexname"):
+        fam = {}
+        for l in lemmas:
+            c = general.concept(l, "VERB", depth=depth if depth != "lexname" else 0)
+            fam[l] = c["lexname"] if depth == "lexname" else c["family_name"]
+        groups = defaultdict(list)
+        for l, f in fam.items():
+            groups[f].append(l)
+        merged = {(a, b) for g in groups.values() for i, a in enumerate(sorted(g)) for b in sorted(g)[i + 1:]}
+        unrelated = sum(1 for a, b in merged if not (syn[a] & syn[b]))
+        big = sorted(groups.items(), key=lambda kv: -len(kv[1]))[:3]
+        out["families"][str(depth)] = {
+            "families": len(groups), "verbs_per_family": round(len(lemmas) / len(groups), 2),
+            "synonym_pairs_merged": round(len(merged & synonym_pairs) / max(len(synonym_pairs), 1), 3),
+            "merged_pairs": len(merged), "unrelated_share": round(unrelated / max(len(merged), 1), 3),
+            "largest": [(f, len(g), g[:6]) for f, g in big]}
+    out["synonym_pairs_in_test"] = len(synonym_pairs)
+    return out
 
 
 # ----------------------------------------------------------------------------- affect

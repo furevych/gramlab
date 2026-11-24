@@ -326,3 +326,26 @@ families are the next lever.
 **Next, in order:** run `kaggle_core.ipynb` for the WordNet rows; entity typer and spaCy parser adapter (delegated,
 scored on the same rows); families from WordNet depth 1–3 vs the word codes, scored by key collisions vs paraphrase
 matches; coreference for pronoun slots (GUM has gold); the VAD lexicon file for the affect row.
+
+### Run 9b — layer 0 with WordNet, 2026-11-24 (local CPU, seconds)
+
+`core/wordnet.py` reads WordNet 3.0's files directly (155k lemmas, 118k synsets; no nltk). Coverage on GUM test:
+**99.2% of action lemmas and 98.2% of common-noun arguments** get a concept id — layer 0 covers the language side;
+what it does not cover is exactly the specific-entity side (names), as designed.
+
+**Families: first-sense hypernyms fail.** Reference = pairs of GUM-test verb lemmas that share any WordNet synset
+(908 pairs among 659 verbs). Family = hypernym *d* steps above the first sense:
+
+| family | families | synonym pairs merged | pairs merged | of which unrelated |
+|---|---:|---:|---:|---:|
+| depth 0 (the synset) | 601 | 7.4% | 67 | 0% |
+| depth 1 | 398 | 10.7% | 745 | **87%** |
+| depth 2 | 275 | 13.7% | 2,125 | 94% |
+| lexicographer file (15 classes) | 15 | 30.3% | 20,595 | 99% |
+
+The cause is visible in single cases: *wash*'s first sense is not the cleaning one, so *wash / clean / rinse* land in
+three different depth-2 families while *murder → kill* merge correctly. WordNet supplies trustworthy **ids**; usable
+**families** need the sense to be chosen first (a layer-1 sense picker, scored on SemCor) or families learned from
+text (the word codes) and scored on an external paraphrase set. Core default is now depth 0: the key never merges
+wrongly, and merging is a layer-1 result still to be earned. With depth 0 the GUM-test index has 1,188 family keys
+for 2,308 occurrences (p90 posting size 3, max 48: *person travel.v.01 —*), i.e. still mostly one occurrence per key.

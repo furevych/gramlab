@@ -36,66 +36,85 @@ class GeneralIndex:
     """lemma + UPOS -> (synset id, family id at depth d, sense name).  First-sense policy: layer 0
     does not disambiguate; a layer-1 sense picker may pass `sense` explicitly."""
 
-    def __init__(self, family_depth=2):
+    def __init__(self, family_depth=0, wordnet_path=None):
         self.family_depth = family_depth
         self.backend = "lemma"
-        self._wn = None
+        self._wn = None            # dependency-free reader (core.wordnet)
+        self._nltk = None          # nltk wordnet, if someone prefers it
         try:
-            from nltk.corpus import wordnet as wn  # optional preset
-            wn.synsets("wash")                      # raises LookupError when the data is not installed
-            self._wn = wn
-            self.backend = "wordnet"
+            from .wordnet import WordNet
+            self._wn = WordNet(wordnet_path)
+            self.backend = "wordnet-file"
         except Exception:
-            pass
+            try:
+                from nltk.corpus import wordnet as nwn
+                nwn.synsets("wash")
+                self._nltk = nwn
+                self.backend = "wordnet-nltk"
+            except Exception:
+                pass
         self.table = {}                              # id -> canonical name (for decoding)
 
     # -- lookup -----------------------------------------------------------------------------
     def synsets(self, lemma, upos):
-        if self._wn is None:
-            return []
+        """List of synset handles in sense order: (pos, offset) for the file reader, nltk Synsets otherwise."""
         pos = _UD_TO_WN.get(upos)
         if pos is None:
             return []
-        return self._wn.synsets(lemma.lower().replace(" ", "_"), pos=pos)
+        if self._wn is not None:
+            return [(pos, o) for o in self._wn.synsets(lemma, pos)]
+        if self._nltk is not None:
+            return self._nltk.synsets(lemma.lower().replace(" ", "_"), pos=pos)
+        return []
 
-    def concept(self, lemma, upos, sense=None):
-        """Returns dict(id, family, name, covered). `sense`: a synset name chosen by layer 1."""
+    def _name(self, s):
+        return self._wn.name(*s) if self._wn is not None else s.name()
+
+    def _family_name(self, s, depth=None):
+        depth = self.family_depth if depth is None else depth
+        if self._wn is not None:
+            pos, off = s
+            return self._wn.name(pos, self._wn.family(pos, off, depth))
+        x = s
+        for _ in range(depth):
+            hyper = x.hypernyms() or x.instance_hypernyms()
+            if not hyper:
+                break
+            x = hyper[0]
+        return x.name()
+
+    def lexname(self, s):
+        return self._wn.lexname(*s) if self._wn is not None else s.lexname()
+
+    def concept(self, lemma, upos, sense=None, depth=None):
+        """Returns dict(id, family, name, family_name, lexname, covered). `sense`: a synset name chosen by layer 1.
+        `depth`: hypernym steps for the family (default self.family_depth)."""
         lemma = lemma.lower()
         ss = self.synsets(lemma, upos)
         if ss:
             s = ss[0]
             if sense is not None:
                 for cand in ss:
-                    if cand.name() == sense:
+                    if self._name(cand) == sense:
                         s = cand
                         break
-            name = s.name()
-            fam = self._family(s)
+            name = self._name(s)
+            fam = self._family_name(s, depth)
             cid = stable_id("wn", name)
             fid = stable_id("wnfam", fam)
             self.table[cid] = name
             self.table[fid] = fam
-            return {"id": cid, "family": fid, "name": name, "family_name": fam, "covered": True}
+            return {"id": cid, "family": fid, "name": name, "family_name": fam, "lexname": self.lexname(s), "covered": True}
         key = f"{lemma}/{upos}"
         cid = stable_id("lemma", key)
         self.table[cid] = key
-        return {"id": cid, "family": cid, "name": key, "family_name": key, "covered": False}
-
-    def _family(self, synset):
-        """Hypernym `family_depth` steps up (or the top of the chain), first path."""
-        s = synset
-        for _ in range(self.family_depth):
-            hyper = s.hypernyms() or s.instance_hypernyms()
-            if not hyper:
-                break
-            s = hyper[0]
-        return s.name()
+        return {"id": cid, "family": cid, "name": key, "family_name": key, "lexname": None, "covered": False}
 
     def synonyms(self, lemma, upos, max_n=20):
         out = []
         for s in self.synsets(lemma, upos):
-            for l in s.lemma_names():
-                l = l.replace("_", " ")
+            names = self._wn.lemmas(*s) if self._wn is not None else [l.replace("_", " ") for l in s.lemma_names()]
+            for l in names:
                 if l != lemma and l not in out:
                     out.append(l)
         return out[:max_n]
