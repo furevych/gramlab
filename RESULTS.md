@@ -558,3 +558,16 @@ place; Einstein → person; Microsoft, Tesla → organization; World War II → 
 (`gaz=<type>`), never as an override. To run it: attach the `gramlab-fullwiki` notebook output as an input to
 `gramlab-core` (it holds `work/bm25_full/passages.jsonl`, 4.96M leads), re-import the notebook, Save & Run All; the
 typing row then reports the typer with and without the gazetteer.
+
+## Run 13 — a gazetteer from Wikipedia lead sentences (`gramlab-core` Version 3, Kaggle CPU, 2026-11-25)
+
+Built in 119 s from the full-Wikipedia index (4,955,232 leads): 3,558,424 titles typed (71.8%), 3,263,005 unique
+names after collapsing disambiguated titles — person 1.32M, abstract 0.72M, place 0.49M, organization 0.41M, event
+0.26M, object 0.23M, time 56k, substance 35k, animal 25k, plant 5k. No hand list: the head noun after *is a / is the*
+→ WordNet lexicographer class → type.
+
+Typer on GUM test with the gazetteer as a feature: **specific (named) mentions 78.0%** vs 73.7% without (run 12),
+general mentions unchanged within noise (the Version 3 log overwrote the without-gazetteer row; Version 4 reports
+both). The remaining errors on names are mostly `person → abstract` and `organization → abstract` (titles whose
+lead sentence has no copula pattern, 28% of articles, get no entry). The gazetteer-backed typer is now the occupant
+when the table is present (Kaggle); locally the typer runs without it.
