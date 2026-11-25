@@ -35,13 +35,14 @@ def _shape(w):
 class EntityTyper:
     name = "hashed logistic entity typer (GUM train)"
 
-    def __init__(self, alpha=1e-5, epochs=8, seed=0, general=None):
+    def __init__(self, alpha=1e-5, epochs=8, seed=0, general=None, gazetteer=None):
         self.alpha = alpha
         self.epochs = epochs
         self.seed = seed
         self.clf = None
         self._cache = {}
         self.general = general          # layer-0 GeneralIndex: WordNet lexicographer classes as features
+        self.gazetteer = gazetteer      # layer-0 Gazetteer (Wikipedia lead sentences): name -> type, as a feature
         self._lex = {}
 
     def lexnames(self, lemma):
@@ -96,6 +97,20 @@ class EntityTyper:
         for j in range(max(0, lo - 2), lo):
             if s.upos[j] == "ADP":
                 f.append(f"adp={s.forms[j].lower()}")
+        if self.gazetteer is not None and s.upos[i] == "PROPN":
+            span = " ".join(s.forms[lo:hi])
+            g = self.gazetteer.lookup(span) or self.gazetteer.lookup(w)
+            # the proper-noun run around the head, in case the tag-based span is too wide or narrow
+            if g is None:
+                a = i
+                while a > 0 and s.upos[a - 1] == "PROPN":
+                    a -= 1
+                b = i
+                while b + 1 < len(s) and s.upos[b + 1] == "PROPN":
+                    b += 1
+                g = self.gazetteer.lookup(" ".join(s.forms[a:b + 1]))
+            f.append(f"gaz={g or 'none'}")
+            f.append(f"gaz_shape={g or 'none'}:{_shape(w)}")
         return f
 
     def _items(self, sents, labelled):
@@ -151,12 +166,12 @@ class EntityTyper:
     def save(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
-            pickle.dump({"clf": self.clf, "alpha": self.alpha, "uses_wordnet": self.general is not None}, f)
+            pickle.dump({"clf": self.clf, "alpha": self.alpha, "uses_wordnet": self.general is not None, "uses_gazetteer": self.gazetteer is not None}, f)
 
     @classmethod
-    def load(cls, path, general=None):
+    def load(cls, path, general=None, gazetteer=None):
         with open(path, "rb") as f:
             d = pickle.load(f)
-        m = cls(alpha=d["alpha"], general=general if d.get("uses_wordnet") else None)
+        m = cls(alpha=d["alpha"], general=general if d.get("uses_wordnet") else None, gazetteer=gazetteer if d.get("uses_gazetteer") else None)
         m.clf = d["clf"]
         return m

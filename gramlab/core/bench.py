@@ -379,7 +379,7 @@ def bench_senses(general: GeneralIndex, semcor_dir):
     return r
 
 
-def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=None, linker_path=None, seed=0, semcor=None):
+def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=None, linker_path=None, seed=0, semcor=None, gazetteer=None):
     gum_dir = Path(gum_dir)
     gum_train = read_conllu(gum_dir / "en_gum-ud-train.conllu")
     gum_dev = read_conllu(gum_dir / "en_gum-ud-dev.conllu")
@@ -423,6 +423,13 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     best = max(((a, bench_typing(EntityTyper(alpha=a, general=general).fit(gum_train), gum_dev)) for a in (1e-5, 3e-5, 1e-4)),
                key=lambda x: x[1]["general"]["accuracy"] + x[1]["specific"]["accuracy"])
     typer = EntityTyper(alpha=best[0], general=general).fit(gum_train + gum_dev)
+    if gazetteer and Path(gazetteer).exists():
+        from .gazetteer import Gazetteer
+        gaz = Gazetteer(gazetteer)
+        t2 = time.time()
+        typer_g = EntityTyper(alpha=best[0], general=general, gazetteer=gaz).fit(gum_train + gum_dev)
+        board["typing"][typer_g.name + " + gazetteer"] = {**bench_typing(typer_g, gum_test), "gazetteer_entries": len(gaz), "fit_seconds": round(time.time() - t2, 1)}
+        typer = typer_g                       # the occupant when the gazetteer is available
     board["typing"][typer.name] = {**bench_typing(typer, gum_test), "alpha": best[0], "fit_seconds": round(time.time() - t, 1)}
     if out_dir:
         typer.save(Path(out_dir) / "typer.pkl")
@@ -465,8 +472,9 @@ def main(argv=None):
     ap.add_argument("--train_limit", type=int, default=None)
     ap.add_argument("--linker", default=None)
     ap.add_argument("--semcor", default=None)
+    ap.add_argument("--gazetteer", default=None)
     a = ap.parse_args(argv)
-    run(a.gum, a.amalgum, a.vad, a.out, a.train_limit, a.linker, semcor=a.semcor)
+    run(a.gum, a.amalgum, a.vad, a.out, a.train_limit, a.linker, semcor=a.semcor, gazetteer=a.gazetteer)
 
 
 if __name__ == "__main__":
