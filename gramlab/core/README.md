@@ -21,12 +21,17 @@ question --index.search / index.related--> occurrences --writer--> answer
 | 1 · learned | sense picker | (lemma, pos, context) → synset | `sense.RankPicker` for verbs (shared hashed logistic model predicting the sense rank, SemCor-trained, 62.4% vs first sense 59.7%); first sense for nouns (picker 72.9% < 74.4%) | SemCor brown2 accuracy, verbs / nouns |
 | 1 · learned | coreference | pronoun mention → antecedent mention | `coref.RankedResolver` (mention-pair ranker on GUM train chains, 54.9%); rules: subject-first 47.2%, nearest nominal 14.3% | GUM test: pronoun event arguments in the gold chain |
 | 1 · learned | parser for live text | text → `Sentence` | **none yet** (`ConlluParser` reads parsed files) | link F1 through `GoldLinker` on predicted vs gold parses |
-| 2 · index | `key.Keyer`, `index.MeaningIndex` | `(slot(actor), action, slot(patient), status)` → id; family postings `(class, sense_k, class)` for the action's top-k senses (k=3); `add / lookup / related / search` | postings + occurrence records; `search` delegates to Level-1 `BM25Index` / `HybridRetriever` when attached | key exact vs gold, position-only control; occurrences per key |
+| 2 · index | `key.Keyer`, `index.MeaningIndex` | `(slot(actor), action, slot(patient), status)` → id; family postings `(class, sense_k, class)` and identity postings `(id, sense_k, id)` for the action's top-k senses (k=3 when posting, 10 when looking up); `add / lookup / related / search` | postings + occurrence records; `search` delegates to Level-1 `BM25Index` / `HybridRetriever` when attached | key exact vs gold, position-only control; occurrences per key |
 | 3 · writer | `Pipeline.writer` | `(question, passages) → text` | Level 1's Qwen-0.5B + LoRA (`scripts/finetune_hf.py`), attached at chat time | faithfulness / token F1 (RESULTS run 8) |
 
 A **slot** is `(kind, class, id)`: kind ∈ general / specific / pronoun / missing; class = entity type for
 specific mentions, entity type or concept family for general ones; id = synset or registry id. Order is
 meaning. IDs are deterministic (`stable_id`), so two machines agree without a counter.
+
+## End-to-end benchmark
+
+`python -m gramlab.core.bench_retrieval --amalgum '<glob>'` indexes all of AMALGUM through the pipeline and measures
+event retrieval against BM25 with synonym-substituted role queries and role-reversal decoys (run 10 in `RESULTS.md`).
 
 ## Run the scoreboard
 

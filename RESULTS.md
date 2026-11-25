@@ -418,3 +418,37 @@ nouns only is 58.5%), and training on the closest same-chain mention only. The r
 pronoun slot now takes its antecedent's kind, class and id, following pronoun→pronoun links until a nominal (≤4 hops).
 On GUM test 601 of 651 third-person pronoun slots reach a nominal, and the specific-key count rises from 1,960 to
 2,031 because identities now differ where before everything was "pronoun". The linker and key rows are unchanged.
+
+## Run 10 — does the ordered index help finding? (2026-11-24, local CPU, ~4 min)
+
+The first end-to-end test of the core: all 191,546 AMALGUM sentences ingested through the pipeline (263,060
+occurrences; roles from the parse, keys from the registries, family and identity postings under the verb's top-3
+senses). 2,000 held-out source sentences whose main event has nominal actor and patient give two query types:
+
+* **synonym query** — `<actor words> <verb synonym> <patient words>`, the synonym taken from the verb's first synset
+  (*weight → burden*), so the source's verb never appears in the query;
+* **reversal decoy** — a copy of the source with actor and patient exchanged, added to the collection and indexed
+  under the swapped roles: same words, opposite meaning.
+
+Systems: BM25 over sentences; **key lookup** (the query event's family/identity postings, BM25 order within the
+candidate set); **hybrid** (BM25 + bonus for a shared family key + bonus for a shared identity key). Query-side lookup
+uses the synonym's top-10 senses (postings stay at 3; widening the lookup from 3 to 10 senses is what raised key
+recall from 0.67 to 0.92).
+
+| system | recall@1 | recall@10 | source ranked above its decoy | candidate set p50 / p90 | µs per query |
+|---|---:|---:|---:|---|---:|
+| BM25 | 0.770 | 0.947 | 0% (tied 100%) | 193,546 (all) | 5,300 |
+| key lookup | **0.922** | 0.959 | **95.4%** | 24 / 392 | **570** |
+| hybrid | **0.943** | **0.996** | 95.4% | — | 4,570 |
+
+What it says. (1) On synonym queries the ordered index beats BM25 by 15 points alone and by 17 in the hybrid, and
+never ranks a decoy above its source. (2) Reversal is invisible to a bag of words by construction; the ordered key
+separates 95% of pairs — the remaining 5% are same-class, same-id slots. (3) The key lookup is ~10× cheaper than
+scoring the collection, because the candidate set is 24 sentences at the median. That is the computation saving the
+project set out to find, measured on real sentences rather than a 17-noun world.
+
+Caveats, stated plainly: the synonym comes from WordNet, the same resource the key uses, so the synonym query is a
+test of the mechanism under favourable conditions (BM25 is equally favoured by the verbatim argument words); the
+query's roles are constructed, not parsed — on live text the linker (0.884 F1) and a parser sit in front of this;
+the decoys are synthetic swaps. The next version of this test should use parsed queries and an external
+paraphrase set.

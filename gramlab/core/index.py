@@ -36,6 +36,8 @@ class MeaningIndex:
             self.postings[("specific", sk, e.status)].append(i)
             for fk in fks:
                 self.postings[("family", fk, e.status)].append(i)
+            for ik in self.keyer.identity_keys(e, s, context):
+                self.postings[("identity", ik, e.status)].append(i)
             ids.append(i)
         return ids
 

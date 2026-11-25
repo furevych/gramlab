@@ -106,14 +106,14 @@ class Keyer:
         self.table[k] = readable
         return k
 
-    def family_keys(self, event: Event, sent=None, context=None) -> list:
+    def family_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
         """One family key per posted sense of the action: (class(actor), sense, class(patient)).
         Posting under several senses links synonyms (wash.v.03 ~ rinse) without collapsing verbs into one
         wrong hypernym family (run 9b/9c). With a sense picker and the sentence, the chosen sense comes first
         and is the occurrence's family_key; the top-k by WordNet order fill the rest."""
         a, p = self.slot(event.actor, context), self.slot(event.patient, context)
         all_ss = self.general.synsets(event.action, "VERB")
-        ss = list(all_ss[: self.senses])
+        ss = list(all_ss[: (senses or self.senses)])
         if self.sense_picker is not None and sent is not None and len(all_ss) > 1:
             chosen = self.sense_picker.pick(event.action, "v", self.as_semcor(sent), event.verb)
             if chosen is not None:
@@ -124,6 +124,22 @@ class Keyer:
         for name in names:
             readable = (a.cls, name, p.cls)
             k = stable_id("fam", *readable)
+            self.table[k] = readable
+            keys.append(k)
+        return keys
+
+    def identity_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
+        """Ordered identity postings: (id(actor), sense, id(patient)) for the same posted senses. Separates
+        'Tom washed the cat' from 'the cat washed Tom' even when both slots have the same class.
+        `senses` widens the sense list for lookups (postings stay at self.senses)."""
+        a, p = self.slot(event.actor, context), self.slot(event.patient, context)
+        all_ss = self.general.synsets(event.action, "VERB")
+        ss = list(all_ss[: (senses or self.senses)])
+        names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
+        keys = []
+        for name in names:
+            readable = (a.id, name, p.id)
+            k = stable_id("ident", *[str(x) for x in readable])
             self.table[k] = readable
             keys.append(k)
         return keys
