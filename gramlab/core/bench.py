@@ -85,6 +85,11 @@ def bench_keys(pipe: Pipeline, sents, pred_batches):
             c = res[g.voice]
             c["events"] += 1
             c["key_exact"] += pred == gold
+            no_pron = g.actor.kind != "pronoun" and g.patient.kind != "pronoun"
+            c["events_no_pronoun"] += no_pron
+            c["key_exact_no_pronoun"] += no_pron and pred == gold
+            c["roles_exact_no_pronoun"] += no_pron and e is not None and e.actor is not None and e.patient is not None \
+                and e.actor.head == g.actor.head and e.patient.head == g.patient.head
             c["key_reversed"] += (pred[0] == gold[2] and pred[2] == gold[0] and gold[0] != gold[2])
             c["position_only_exact"] += pos == gold
             c["classes_known"] += ("unknown" not in gold and "pronoun" not in gold)
@@ -96,7 +101,10 @@ def bench_keys(pipe: Pipeline, sents, pred_batches):
     out = {}
     for voice, c in res.items():
         n = c["events"] or 1
+        m = c["events_no_pronoun"] or 1
         out[voice] = {"events": c["events"], "key_exact": round(c["key_exact"] / n, 4),
+                      "events_no_pronoun": c["events_no_pronoun"], "key_exact_no_pronoun": round(c["key_exact_no_pronoun"] / m, 4),
+                      "roles_exact_no_pronoun": round(c["roles_exact_no_pronoun"] / m, 4),
                       "position_only_control": round(c["position_only_exact"] / n, 4),
                       "reversed": c["key_reversed"], "classes_known": round(c["classes_known"] / n, 4),
                       "pronoun_arg_share": round(c["pronoun_args"] / (2 * n), 4)}
@@ -123,8 +131,10 @@ class PriorTyper:
 
 
 def bench_typing(typer, sents):
+    """Event arguments on GUM test whose gold type is annotated: accuracy per kind, plus a confusion summary."""
     n = Counter()
-    for s in sents:
+    items, golds, kinds = [], [], []
+    for si, s in enumerate(sents):
         for v, voice, a, p in predicates(s):
             for g in (a, p):
                 if g is None or s.upos[g] == "PRON":
@@ -132,10 +142,22 @@ def bench_typing(typer, sents):
                 gold = s.mention(g).etype
                 if gold == "unknown":
                     continue
-                kind = "specific" if s.upos[g] == "PROPN" else "general"
-                n[kind, "n"] += 1
-                n[kind, "ok"] += typer.predict(s, g) == gold
-    return {k: {"n": n[k, "n"], "accuracy": round(n[k, "ok"] / max(n[k, "n"], 1), 4)} for k in ("general", "specific")}
+                items.append((si, g))
+                golds.append(gold)
+                kinds.append("specific" if s.upos[g] == "PROPN" else "general")
+    if hasattr(typer, "predict_batch"):
+        preds = typer.predict_batch(sents, items)
+    else:
+        preds = [typer.predict(sents[si], g) for si, g in items]
+    conf = Counter()
+    for pr, gd, kd in zip(preds, golds, kinds):
+        n[kd, "n"] += 1
+        n[kd, "ok"] += pr == gd
+        if pr != gd:
+            conf[f"{gd}->{pr}"] += 1
+    out = {k: {"n": n[k, "n"], "accuracy": round(n[k, "ok"] / max(n[k, "n"], 1), 4)} for k in ("general", "specific")}
+    out["top_confusions"] = conf.most_common(6)
+    return out
 
 
 # ----------------------------------------------------------------------------- general coverage
@@ -258,7 +280,7 @@ def bench_coreference(sents, train=None, dev=None):
 
 
 # ----------------------------------------------------------------------------- live front end
-def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4, out_dir=None):
+def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4, out_dir=None, typer=None, pipe=None):
     """Tagger + lemmatizer trained on AMALGUM silver tags; GUM test re-tagged on gold tokens (no parse, no entities);
     the linker runs on the re-tagged sentences and is scored against gold roles. Cost of losing the parse."""
     from .tagger import Lemmatizer, LiveFrontEnd, PerceptronTagger
@@ -266,7 +288,7 @@ def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4
     sub = train_sents[:n_train] if train_sents else gum_train
     tagger = PerceptronTagger().fit(sub, epochs=epochs)
     lem = Lemmatizer().fit(train_sents or gum_train)
-    fe = LiveFrontEnd(tagger, lem)
+    fe = LiveFrontEnd(tagger, lem, typer)
     fit_s = time.time() - t
     t = time.time()
     live = [fe.sentence(s.forms, s.sid, s.doc) for s in gum_test]
@@ -283,11 +305,12 @@ def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4
     live_pred = {(si, v): voice for si, s in enumerate(live) for v, voice, _, _ in predicates(s)}
     found = sum(1 for k in gold_pred if k in live_pred)
     voice_ok = sum(1 for k, vc in gold_pred.items() if live_pred.get(k) == vc)
-    links, _ = bench_links(linker, gum_test, input_sents=live)
-    out = {"front_end": fe.name, "train_sentences": len(sub), "fit_seconds": round(fit_s, 1), "tag_us_per_sentence": round(tag_us, 0),
+    links, pred = bench_links(linker, gum_test, input_sents=live)
+    keys_live = bench_keys(pipe, gum_test, pred) if pipe is not None else None
+    out = {"front_end": fe.name, "typer": getattr(typer, "name", None), "train_sentences": len(sub), "fit_seconds": round(fit_s, 1), "tag_us_per_sentence": round(tag_us, 0),
            "upos_accuracy": round(u_ok / n, 4), "xpos_accuracy": round(x_ok / n, 4), "lemma_accuracy": round(l_ok / n, 4),
            "gold_predicates": len(gold_pred), "live_predicates": len(live_pred), "gold_predicates_found": round(found / len(gold_pred), 4),
-           "voice_agreement_on_found": round(voice_ok / max(found, 1), 4), "links_live": links}
+           "voice_agreement_on_found": round(voice_ok / max(found, 1), 4), "links_live": links, "keys_live": keys_live}
     if out_dir:
         fe.save(Path(out_dir) / "frontend.pkl")
     return out
@@ -355,14 +378,22 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
               f"swaps {links['all']['role_swaps']:3d} {links['us_per_sentence']:7.0f} µs/sent | key exact active {keys['active']['key_exact']:.3f} "
               f"passive {keys['passive']['key_exact']:.3f} (position-only {keys['active']['position_only_control']:.3f}/{keys['passive']['position_only_control']:.3f})")
 
-    typer = PriorTyper().fit(gum_train)
-    board["typing"] = bench_typing(typer, gum_test)
+    from .typer import EntityTyper
+    board["typing"] = {"lemma-majority prior": bench_typing(PriorTyper().fit(gum_train), gum_test)}
+    t = time.time()
+    best = max(((a, bench_typing(EntityTyper(alpha=a, general=general).fit(gum_train), gum_dev)) for a in (1e-5, 3e-5, 1e-4)),
+               key=lambda x: x[1]["general"]["accuracy"] + x[1]["specific"]["accuracy"])
+    typer = EntityTyper(alpha=best[0], general=general).fit(gum_train + gum_dev)
+    board["typing"][typer.name] = {**bench_typing(typer, gum_test), "alpha": best[0], "fit_seconds": round(time.time() - t, 1)}
+    if out_dir:
+        typer.save(Path(out_dir) / "typer.pkl")
     board["general"] = bench_general(general, gum_test)
     board["affect"] = bench_affect(affect, gum_test)
     board["senses"] = bench_senses(general, semcor)
     board["coreference"] = bench_coreference(gum_test, gum_train, gum_dev)
     resolver = board["coreference"].pop("_resolver", None)
-    board["live"] = bench_live(linkers["backfill"], gum_train, train if train is not gum_train else None, gum_test, out_dir=out_dir)
+    board["live"] = bench_live(linkers["backfill"], gum_train, train if train is not gum_train else None, gum_test, out_dir=out_dir,
+                               typer=typer, pipe=Pipeline(linker=linkers["backfill"], general=general, specific=specific))
     picker = board["senses"].pop("_picker", None)
     board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test, picker, resolver)
     board["index"]["sense_picker"] = getattr(picker, "name", None)

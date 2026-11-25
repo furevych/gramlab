@@ -484,3 +484,40 @@ wash* is read as *give* (the light-verb case stays a miss).
 linker 0.884, key 0.830 / 0.708, coreference ranker 0.558 (0.549 locally; SGD/alpha choice noise), live front end
 link F1 0.854 (tagger on 40k sentences, 268 s), event retrieval BM25 0.770 / key 0.922 / hybrid 0.943 recall@1 and
 95.4% decoy separation, identical to the local run. Whole scoreboard plus the end-to-end test: under ten minutes, no GPU.
+
+## Run 12 — entity typer, and what limits live keys (2026-11-25, local CPU, seconds)
+
+**Typer.** Hashed logistic regression over the head word, shape, suffixes, span words, neighbours and tags, trained on
+GUM train+dev gold types, alpha on dev. Adding layer 0 as features — the WordNet lexicographer class of the lemma's
+first three noun senses (*noun.person, noun.artifact, noun.event, noun.location*) and of its hypernym — is what
+moved it; GUM-test event arguments:
+
+| typer | general (n=1,423) | specific (n=236) |
+|---|---:|---:|
+| lemma-majority prior | 59.3 | 58.1 |
+| surface features | 70.8 | 65.7 |
+| **surface + WordNet classes** | **74.5** | **73.7** |
+
+Top confusions are *event→abstract* and *object→abstract* — GUM's own hardest boundary. 2 s to train.
+
+**Live keys, decomposed.** The typer now fills entity types on raw text (`LiveFrontEnd(..., typer)`), so the whole
+pipeline — tokens → tags → roles → classes → keys — runs with nothing from the annotation. On GUM-test events with
+both roles:
+
+| | gold parse + gold classes | live (tagger, linker, typer) |
+|---|---:|---:|
+| roles exact, events without pronouns (n=258) | 0.678 | 0.616 |
+| class key exact, events without pronouns | 0.740 | 0.368 |
+| class key exact, all events (n=705) | 0.826 | 0.194 |
+
+Reading: the roles survive losing the parse (−6 points); the key does not survive the typer, because both slots must
+be classed correctly (0.745² ≈ 0.55 is the ceiling with independent errors, and event arguments are the harder
+mentions). On the full set the live number also loses every pronoun argument (39%), whose class on gold GUM comes
+from the coreference annotation; the live path needs the resolver's antecedent to carry the typer's class, which is
+wired but not yet measured here. So the live bottleneck is now entity typing, not role linking — the next component
+to improve is the typer (more context, a gazetteer from the Wikipedia index, the seed registry), and the measurement
+to add is live keys with coreference.
+
+Raw-text check: *Tom washed the cat* → (person, wash, animal), identical for the passive; *The soldiers were murdered
+by the rebels near Belgrade* → (person, murder, person) with rebels as actor; *Maya did not rinse the horse in Paris*
+→ negated; *Microsoft bought the company in 2014* → (organization, buy, organization).

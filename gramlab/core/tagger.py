@@ -159,9 +159,10 @@ class LiveFrontEnd:
     """tokens -> core Sentence with predicted UPOS/XPOS/lemma; no heads, no deprels, no entities."""
     name = "perceptron tagger + lemma table (no parser)"
 
-    def __init__(self, tagger: PerceptronTagger, lemmatizer: Lemmatizer):
+    def __init__(self, tagger: PerceptronTagger, lemmatizer: Lemmatizer, typer=None):
         self.tagger = tagger
         self.lemmatizer = lemmatizer
+        self.typer = typer                # core.typer.EntityTyper: fills entity types on live text
 
     def sentence(self, words, sid="", doc=""):
         tags = self.tagger.tag(words)
@@ -169,8 +170,11 @@ class LiveFrontEnd:
         xpos = [x for u, x in tags]
         lemmas = [self.lemmatizer.lemma(w, x) for w, x in zip(words, xpos)]
         n = len(words)
-        return Sentence(sid, list(words), lemmas, upos, xpos, [-1] * n, ["_"] * n, [None] * n, doc,
-                        ents_raw=[""] * n, feats=["_"] * n)
+        s = Sentence(sid, list(words), lemmas, upos, xpos, [-1] * n, ["_"] * n, [None] * n, doc,
+                     ents_raw=[""] * n, feats=["_"] * n)
+        if self.typer is not None:
+            self.typer.annotate(s)
+        return s
 
     def save(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -178,10 +182,10 @@ class LiveFrontEnd:
             pickle.dump({"tagger": self.tagger, "lemmatizer": self.lemmatizer}, f)
 
     @classmethod
-    def load(cls, path):
+    def load(cls, path, typer=None):
         with open(path, "rb") as f:
             d = pickle.load(f)
-        return cls(d["tagger"], d["lemmatizer"])
+        return cls(d["tagger"], d["lemmatizer"], typer)
 
 
 _TOK = re.compile(r"[A-Za-z]+(?:[-'][A-Za-z]+)*|\d[\d,.]*|[^\sA-Za-z\d]")
