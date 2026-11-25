@@ -430,6 +430,29 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
         t2 = time.time()
         typer_g = EntityTyper(alpha=best[0], general=general, gazetteer=gaz).fit(gum_train + gum_dev)
         board["typing"][typer.name + " + gazetteer"] = {**bench_typing(typer_g, gum_test), "gazetteer_entries": len(gaz), "fit_seconds": round(time.time() - t2, 1)}
+        # diagnostic: how often does a GUM-test name hit the table, and is the table's type right on its own?
+        hit = ok = n = 0
+        misses, wrong = [], []
+        for s_ in gum_test:
+            for v, voice, a, p in predicates(s_):
+                for g in (a, p):
+                    if g is None or s_.upos[g] != "PROPN":
+                        continue
+                    m = s_.mention(g)
+                    if m.etype == "unknown":
+                        continue
+                    n += 1
+                    gt = gaz.lookup(m.text) or gaz.lookup(s_.forms[g])
+                    if gt is None:
+                        if len(misses) < 12:
+                            misses.append(m.text)
+                        continue
+                    hit += 1
+                    ok += gt == m.etype
+                    if gt != m.etype and len(wrong) < 12:
+                        wrong.append((m.text, gt, m.etype))
+        board["typing"]["gazetteer_diagnostic"] = {"names": n, "hit_rate": round(hit / max(n, 1), 4), "type_accuracy_on_hits": round(ok / max(hit, 1), 4),
+                                                   "sample_misses": misses, "sample_wrong": wrong}
         typer = typer_g                       # the occupant when the gazetteer is available
     if out_dir:
         typer.save(Path(out_dir) / "typer.pkl")

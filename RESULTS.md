@@ -566,8 +566,9 @@ names after collapsing disambiguated titles — person 1.32M, abstract 0.72M, pl
 0.26M, object 0.23M, time 56k, substance 35k, animal 25k, plant 5k. No hand list: the head noun after *is a / is the*
 → WordNet lexicographer class → type.
 
-Typer on GUM test with the gazetteer as a feature: **specific (named) mentions 78.0%** vs 73.7% without (run 12),
-general mentions unchanged within noise (the Version 3 log overwrote the without-gazetteer row; Version 4 reports
-both). The remaining errors on names are mostly `person → abstract` and `organization → abstract` (titles whose
-lead sentence has no copula pattern, 28% of articles, get no entry). The gazetteer-backed typer is now the occupant
-when the table is present (Kaggle); locally the typer runs without it.
+**Correction from Version 4 (both rows reported):** with and without the gazetteer the typer scores the same,
+71.7% general / 78.0% specific. The 78.0 (vs 73.7 in run 12) comes from the dev-chosen regularization (alpha 1e-4
+on Kaggle vs 3e-5 locally), not from the table. So the gazetteer feature, as wired, adds nothing measurable on GUM
+test names — either the lookups rarely hit GUM's names (which are often people in interviews and fiction, not
+Wikipedia titles) or their types are wrong; a diagnostic (hit rate, type accuracy on hits, sample misses) is in the
+next run. The gazetteer stays in layer 0 as data; it is not yet an improvement.
