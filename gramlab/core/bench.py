@@ -423,14 +423,14 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     best = max(((a, bench_typing(EntityTyper(alpha=a, general=general).fit(gum_train), gum_dev)) for a in (1e-5, 3e-5, 1e-4)),
                key=lambda x: x[1]["general"]["accuracy"] + x[1]["specific"]["accuracy"])
     typer = EntityTyper(alpha=best[0], general=general).fit(gum_train + gum_dev)
+    board["typing"][typer.name] = {**bench_typing(typer, gum_test), "alpha": best[0], "fit_seconds": round(time.time() - t, 1)}
     if gazetteer and Path(gazetteer).exists():
         from .gazetteer import Gazetteer
         gaz = Gazetteer(gazetteer)
         t2 = time.time()
         typer_g = EntityTyper(alpha=best[0], general=general, gazetteer=gaz).fit(gum_train + gum_dev)
-        board["typing"][typer_g.name + " + gazetteer"] = {**bench_typing(typer_g, gum_test), "gazetteer_entries": len(gaz), "fit_seconds": round(time.time() - t2, 1)}
+        board["typing"][typer.name + " + gazetteer"] = {**bench_typing(typer_g, gum_test), "gazetteer_entries": len(gaz), "fit_seconds": round(time.time() - t2, 1)}
         typer = typer_g                       # the occupant when the gazetteer is available
-    board["typing"][typer.name] = {**bench_typing(typer, gum_test), "alpha": best[0], "fit_seconds": round(time.time() - t, 1)}
     if out_dir:
         typer.save(Path(out_dir) / "typer.pkl")
     board["general"] = bench_general(general, gum_test)
