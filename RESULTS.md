@@ -452,3 +452,30 @@ test of the mechanism under favourable conditions (BM25 is equally favoured by t
 query's roles are constructed, not parsed — on live text the linker (0.884 F1) and a parser sit in front of this;
 the decoys are synthetic swaps. The next version of this test should use parsed queries and an external
 paraphrase set.
+
+## Run 11 — live text without a parser, 2026-11-24 (local CPU; tagger 40k sentences ≈ 3 min)
+
+The parser slot was empty, which kept everything (chat, Wikipedia, real paraphrase sets) on pre-parsed corpora. The
+minimal occupant uses only what the core already had: an averaged-perceptron tagger (UPOS|XPOS jointly) and a
+lemma table, both trained on AMALGUM's silver tags; predicates are the tagged verbs; voice and status come from
+surface rules (*be/get* + participle within three tokens; *not/never*, *may/might/could* before the verb). The
+linker never used dependency labels as features, so it runs unchanged. Scored on GUM test re-tagged on gold tokens:
+
+| | gold parse | live front end (no parser) |
+|---|---:|---:|
+| UPOS / XPOS / lemma accuracy | — | 0.942 / 0.953 / 0.980 |
+| gold predicates found (voice agreement on found) | — | 0.940 (0.994) |
+| link F1 all / active / passive | 0.884 / 0.893 / 0.781 | **0.851 / 0.856 / 0.802** |
+| role swaps / 2,308 | 12 | 16 |
+| µs per sentence (tagging + linking) | 180 | 1,400 + 245 |
+
+Losing the parse costs 3.3 points of link F1 and nothing on passives (the surface voice rule is as good as the
+parse's `nsubj:pass`). The tagger finds 2,980 predicates where gold has 2,308: the extra ones are verbs without a
+subject or object in the annotation (coordinated, infinitival, nominal-predicate sentences), which produce extra,
+mostly role-less occurrences.
+
+`Pipeline.ingest_text()` now takes raw text. The sentences the toy world was built on, run live with zero hand rules:
+*Tom washed the cat* and *The cat was washed by Tom* share family and identity keys; *The cat washed Tom* does not;
+*The soldiers were murdered by the rebels* → actor *rebels*, patient *soldiers*; *Maya did not rinse the horse* →
+negated. Still visible: names are class `unknown` until an entity typer lands (delegated), and *Tom gave the cat a
+wash* is read as *give* (the light-verb case stays a miss).

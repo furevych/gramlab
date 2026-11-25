@@ -28,10 +28,13 @@ from .registry import GeneralIndex, SpecificIndex
 
 
 # ----------------------------------------------------------------------------- links
-def bench_links(linker, sents):
-    """linker must expose link_batch or link. Compares argument heads to UD gold per predicate."""
+def bench_links(linker, sents, pred_batches=None, input_sents=None):
+    """linker must expose link_batch or link. Compares argument heads to UD gold per predicate.
+    input_sents: the sentences the linker reads (e.g. live-tagged copies); scoring always uses `sents` (gold)."""
     t = time.time()
-    pred_batches = linker.link_batch(sents) if hasattr(linker, "link_batch") else [linker.link(s) for s in sents]
+    src = input_sents if input_sents is not None else sents
+    if pred_batches is None:
+        pred_batches = linker.link_batch(src) if hasattr(linker, "link_batch") else [linker.link(s) for s in src]
     us = (time.time() - t) / max(len(sents), 1) * 1e6
     tp, fp, fn, swaps, n = Counter(), Counter(), Counter(), Counter(), Counter()
     for s, evs in zip(sents, pred_batches):
@@ -254,6 +257,42 @@ def bench_coreference(sents, train=None, dev=None):
     return out
 
 
+# ----------------------------------------------------------------------------- live front end
+def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4, out_dir=None):
+    """Tagger + lemmatizer trained on AMALGUM silver tags; GUM test re-tagged on gold tokens (no parse, no entities);
+    the linker runs on the re-tagged sentences and is scored against gold roles. Cost of losing the parse."""
+    from .tagger import Lemmatizer, LiveFrontEnd, PerceptronTagger
+    t = time.time()
+    sub = train_sents[:n_train] if train_sents else gum_train
+    tagger = PerceptronTagger().fit(sub, epochs=epochs)
+    lem = Lemmatizer().fit(train_sents or gum_train)
+    fe = LiveFrontEnd(tagger, lem)
+    fit_s = time.time() - t
+    t = time.time()
+    live = [fe.sentence(s.forms, s.sid, s.doc) for s in gum_test]
+    tag_us = (time.time() - t) / len(gum_test) * 1e6
+    n = u_ok = x_ok = l_ok = 0
+    for g, l in zip(gum_test, live):
+        for i in range(len(g)):
+            n += 1
+            u_ok += g.upos[i] == l.upos[i]
+            x_ok += g.xpos[i] == l.xpos[i]
+            l_ok += g.lemmas[i].lower() == l.lemmas[i]
+    # predicates found: gold predicate verbs recovered by the live rule, and voice agreement
+    gold_pred = {(si, v): voice for si, s in enumerate(gum_test) for v, voice, _, _ in predicates(s)}
+    live_pred = {(si, v): voice for si, s in enumerate(live) for v, voice, _, _ in predicates(s)}
+    found = sum(1 for k in gold_pred if k in live_pred)
+    voice_ok = sum(1 for k, vc in gold_pred.items() if live_pred.get(k) == vc)
+    links, _ = bench_links(linker, gum_test, input_sents=live)
+    out = {"front_end": fe.name, "train_sentences": len(sub), "fit_seconds": round(fit_s, 1), "tag_us_per_sentence": round(tag_us, 0),
+           "upos_accuracy": round(u_ok / n, 4), "xpos_accuracy": round(x_ok / n, 4), "lemma_accuracy": round(l_ok / n, 4),
+           "gold_predicates": len(gold_pred), "live_predicates": len(live_pred), "gold_predicates_found": round(found / len(gold_pred), 4),
+           "voice_agreement_on_found": round(voice_ok / max(found, 1), 4), "links_live": links}
+    if out_dir:
+        fe.save(Path(out_dir) / "frontend.pkl")
+    return out
+
+
 # ----------------------------------------------------------------------------- run
 def bench_senses(general: GeneralIndex, semcor_dir):
     if general._wn is None or not semcor_dir or not Path(semcor_dir, "brown2").exists():
@@ -323,11 +362,12 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
     board["senses"] = bench_senses(general, semcor)
     board["coreference"] = bench_coreference(gum_test, gum_train, gum_dev)
     resolver = board["coreference"].pop("_resolver", None)
+    board["live"] = bench_live(linkers["backfill"], gum_train, train if train is not gum_train else None, gum_test, out_dir=out_dir)
     picker = board["senses"].pop("_picker", None)
     board["index"] = bench_index(Pipeline(general=general, specific=specific), gum_test, picker, resolver)
     board["index"]["sense_picker"] = getattr(picker, "name", None)
     board["index"]["resolver"] = getattr(resolver, "name", None)
-    for k in ("typing", "general", "affect", "senses", "coreference", "index"):
+    for k in ("typing", "general", "affect", "senses", "coreference", "live", "index"):
         print(k, json.dumps(board[k], default=str))
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)

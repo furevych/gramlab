@@ -26,8 +26,13 @@ class ConlluParser:
         return read_conllu(path, limit)
 
 
+_SPLIT = __import__("re").compile(r"(?<=[.!?])\s+(?=[A-Z\"'(])")
+
+
 class Pipeline:
-    def __init__(self, linker=None, general=None, specific=None, affect=None, retriever=None, writer=None, sense_picker=None, resolver=None):
+    def __init__(self, linker=None, general=None, specific=None, affect=None, retriever=None, writer=None, sense_picker=None, resolver=None,
+                 front_end=None):
+        self.front_end = front_end        # core.tagger.LiveFrontEnd for raw text (no parser)
         self.general = general or GeneralIndex()
         self.specific = specific or SpecificIndex()
         self.keyer = Keyer(self.general, self.specific, sense_picker=sense_picker, resolver=resolver)
@@ -49,6 +54,21 @@ class Pipeline:
 
     def events(self, s: Sentence):
         return self.linker.link(s)
+
+    def read_text(self, text: str, doc: str = "") -> list[Sentence]:
+        """Raw text -> Sentences through the live front end (tokenizer + tagger + lemma table)."""
+        if self.front_end is None:
+            raise RuntimeError("no front end: pass front_end=LiveFrontEnd.load(...) for raw text")
+        from .tagger import tokenize
+        out = []
+        for k, chunk in enumerate(p for p in _SPLIT.split(text.strip()) if p.strip()):
+            words = tokenize(chunk)
+            if words:
+                out.append(self.front_end.sentence(words, sid=f"{doc}#{k}", doc=doc))
+        return out
+
+    def ingest_text(self, text: str, doc: str = "") -> int:
+        return self.ingest(self.read_text(text, doc))
 
     def describe(self, e):
         """Readable record: key tuple, family tuple and force."""

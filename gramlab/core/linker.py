@@ -28,8 +28,27 @@ NEG = {"not", "never", "n't", "no"}
 MODAL = {"may", "might", "could"}
 
 
+BE_FORMS = {"is", "are", "was", "were", "be", "been", "being", "am", "'s", "'re", "get", "got", "gets", "getting"}
+
+
+def live_predicates(s: Sentence):
+    """Without a parse: every token tagged VERB is a predicate; passive if it is a participle (VBN) with a form
+    of 'be'/'get' within the three preceding tokens. Role indices are unknown (None)."""
+    out = []
+    for v in range(len(s)):
+        if s.upos[v] != "VERB":
+            continue
+        pre = [w.lower() for w in s.forms[max(0, v - 3):v]]
+        passive = s.xpos[v] == "VBN" and any(w in BE_FORMS for w in pre)
+        out.append((v, "passive" if passive else "active", None, None))
+    return out
+
+
 def predicates(s: Sentence):
-    """Verbal predicates with a subject or object, with voice and the gold role indices."""
+    """Verbal predicates with a subject or object, with voice and the gold role indices.
+    A sentence without dependency labels (live text) falls back to live_predicates."""
+    if s.deprels and all(d == "_" for d in s.deprels):
+        return live_predicates(s)
     out = []
     for v in range(len(s)):
         if s.upos[v] not in ("VERB", "AUX"):
@@ -52,6 +71,13 @@ def predicates(s: Sentence):
 
 
 def status_of(s: Sentence, v: int) -> str:
+    if s.deprels and all(d == "_" for d in s.deprels):          # live text: surface rule
+        pre = [w.lower() for w in s.forms[max(0, v - 4):v]]
+        if any(w in NEG for w in pre):
+            return "negated"
+        if any(w in MODAL for w in pre):
+            return "possible"
+        return "asserted"
     for c in s.children.get(v, ()):
         if s.deprels[c] in ("advmod", "neg") and s.lemmas[c].lower() in NEG:
             return "negated"
