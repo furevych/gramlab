@@ -66,17 +66,24 @@ def bench_links(linker, sents, pred_batches=None, input_sents=None):
 
 
 # ----------------------------------------------------------------------------- keys
-def bench_keys(pipe: Pipeline, sents, pred_batches):
+def bench_keys(pipe: Pipeline, sents, pred_batches, context_sents=None, resolver=None):
+    """context_sents: the sentences the predictions were made on (live copies); with `resolver`, predicted pronoun
+    slots are resolved in that context before classing. Gold keys always use gold sentences (+ annotation)."""
     gold_linker = GoldLinker()
     res = defaultdict(Counter)
-    for s, evs in zip(sents, pred_batches):
+    old_resolver = pipe.keyer.resolver
+    for si, (s, evs) in enumerate(zip(sents, pred_batches)):
         by_verb = {e.verb: e for e in evs}
         for g in gold_linker.link(s):
             if g.actor is None or g.patient is None:
                 continue
+            pipe.keyer.resolver = None
             gold = pipe.keyer.class_triple(g)
             e = by_verb.get(g.verb)
-            pred = pipe.keyer.class_triple(e) if e else ("missing", g.action, "missing")
+            pipe.keyer.resolver = resolver
+            ctx = (context_sents, si) if (context_sents is not None and resolver is not None) else None
+            pred = pipe.keyer.class_triple(e, ctx) if e else ("missing", g.action, "missing")
+            pipe.keyer.resolver = old_resolver
             v = g.verb
             b = next((i for i in range(v - 1, -1, -1) if s.upos[i] in NOMINAL), None)
             f = next((i for i in range(v + 1, len(s)) if s.upos[i] in NOMINAL), None)
@@ -92,7 +99,10 @@ def bench_keys(pipe: Pipeline, sents, pred_batches):
                 and e.actor.head == g.actor.head and e.patient.head == g.patient.head
             c["key_reversed"] += (pred[0] == gold[2] and pred[2] == gold[0] and gold[0] != gold[2])
             c["position_only_exact"] += pos == gold
-            c["classes_known"] += ("unknown" not in gold and "pronoun" not in gold)
+            known = ("unknown" not in gold and "pronoun" not in gold)
+            c["classes_known"] += known
+            c["known_events"] += known
+            c["key_exact_known"] += known and pred == gold
             c["pronoun_args"] += sum(m.kind == "pronoun" for m in (g.actor, g.patient))
     tot = Counter()
     for c in res.values():
@@ -107,6 +117,7 @@ def bench_keys(pipe: Pipeline, sents, pred_batches):
                       "roles_exact_no_pronoun": round(c["roles_exact_no_pronoun"] / m, 4),
                       "position_only_control": round(c["position_only_exact"] / n, 4),
                       "reversed": c["key_reversed"], "classes_known": round(c["classes_known"] / n, 4),
+                      "key_exact_known": round(c["key_exact_known"] / max(c["known_events"], 1), 4), "known_events": c["known_events"],
                       "pronoun_arg_share": round(c["pronoun_args"] / (2 * n), 4)}
     return out
 
@@ -307,10 +318,38 @@ def bench_live(linker, gum_train, train_sents, gum_test, n_train=40000, epochs=4
     voice_ok = sum(1 for k, vc in gold_pred.items() if live_pred.get(k) == vc)
     links, pred = bench_links(linker, gum_test, input_sents=live)
     keys_live = bench_keys(pipe, gum_test, pred) if pipe is not None else None
+    keys_live_coref = None
+    if pipe is not None and gum_train:
+        # a live-conditions resolver: trained on GUM train re-tagged by the front end (no parse), gold chains kept
+        from .coref import RankedResolver
+        t = time.time()
+        live_train = []
+        for s in gum_train:
+            l = fe.sentence(s.forms, s.sid, s.doc)
+            l.ents_raw = list(s.ents_raw)
+            live_train.append(l)
+        live_res = RankedResolver(alpha=1e-4).fit(live_train)
+        # pronoun resolution accuracy under live conditions: pronoun arguments from gold, antecedents found on live copies
+        from .coref import chains_of, FIRST_SECOND
+        chains = chains_of(gum_test)
+        n_p = ok_p = 0
+        for si, s in enumerate(gum_test):
+            for v, voice, a, pt in predicates(s):
+                for g in (a, pt):
+                    if g is None or s.upos[g] != "PRON" or s.forms[g].lower() in FIRST_SECOND or chains[si].get(g) is None:
+                        continue
+                    n_p += 1
+                    ant = live_res.antecedent(live, si, g)
+                    ok_p += ant is not None and chains[ant[0]].get(ant[1]) == chains[si][g]
+        keys_live_coref = bench_keys(pipe, gum_test, pred, context_sents=live, resolver=live_res)
+        keys_live_coref["resolver"] = live_res.name + " (live-trained)"
+        keys_live_coref["pronoun_resolution_live"] = {"n": n_p, "accuracy": round(ok_p / max(n_p, 1), 4)}
+        keys_live_coref["fit_seconds"] = round(time.time() - t, 1)
     out = {"front_end": fe.name, "typer": getattr(typer, "name", None), "train_sentences": len(sub), "fit_seconds": round(fit_s, 1), "tag_us_per_sentence": round(tag_us, 0),
            "upos_accuracy": round(u_ok / n, 4), "xpos_accuracy": round(x_ok / n, 4), "lemma_accuracy": round(l_ok / n, 4),
            "gold_predicates": len(gold_pred), "live_predicates": len(live_pred), "gold_predicates_found": round(found / len(gold_pred), 4),
-           "voice_agreement_on_found": round(voice_ok / max(found, 1), 4), "links_live": links, "keys_live": keys_live}
+           "voice_agreement_on_found": round(voice_ok / max(found, 1), 4), "links_live": links, "keys_live": keys_live,
+           "keys_live_with_coref": keys_live_coref}
     if out_dir:
         fe.save(Path(out_dir) / "frontend.pkl")
     return out

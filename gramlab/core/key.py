@@ -144,9 +144,10 @@ class Keyer:
             keys.append(k)
         return keys
 
-    def class_triple(self, event: Event):
-        """(class(actor), action lemma, class(patient)) — the benchmark's comparable form."""
-        a, p = self.slot(event.actor), self.slot(event.patient)
+    def class_triple(self, event: Event, context=None):
+        """(class(actor), action lemma, class(patient)) — the benchmark's comparable form.
+        With context=(sents, si) and a resolver, pronoun slots take their antecedent's class."""
+        a, p = self.slot(event.actor, context), self.slot(event.patient, context)
         return (a.cls, event.action, p.cls)
 
     def decode(self, k):

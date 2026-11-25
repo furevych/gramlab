@@ -521,3 +521,27 @@ to add is live keys with coreference.
 Raw-text check: *Tom washed the cat* → (person, wash, animal), identical for the passive; *The soldiers were murdered
 by the rebels near Belgrade* → (person, murder, person) with rebels as actor; *Maya did not rinse the horse in Paris*
 → negated; *Microsoft bought the company in 2014* → (organization, buy, organization).
+
+### Run 12b — live keys with coreference, and the span bug (2026-11-25, local CPU)
+
+Two fixes to the live path. (1) Mention spans were read from dependency children, so on live text every mention
+shrank to its head word and the typer lost its span, determiner and preposition features; spans are now read from
+the tags when there is no parse (a run of determiners/adjectives/numbers/nominals to the left, following proper
+nouns to the right). With that, the typer scores **73.9 / 73.3** on live-tagged text at gold argument heads
+(74.5 / 73.7 on gold tags) — no train/test mismatch left; retraining it on live-tagged GUM changes nothing
+(72.5 / 72.9 live-only, 73.2 / 75.4 mixed). Document-level voting on a name's type adds under a point and was not
+adopted. (2) The key benchmark gained `key_exact_known`: GUM leaves some pronouns (relative *which/that*)
+unannotated, so their "gold" class is literally `pronoun`, which an unresolved live slot matches by accident; the
+clean view restricts to events whose gold classes are both known (n = 590).
+
+| GUM-test events with both roles, gold classes known | key exact |
+|---|---:|
+| gold parse + gold classes (linker only) | 0.839 |
+| live: tagger + linker + typer, pronouns unresolved | 0.148 |
+| live + coreference ranker trained under live conditions (no parse features) | **0.195** |
+
+Live pronoun resolution is 44.7% (55% with a parse). The ceiling for live keys with independent errors is roughly
+roles-both-right (0.60) × typer² (0.55) ≈ 0.33 for pronoun-free events, and the measured 0.34 is at it — the live
+key is now limited by the typer's 74% and by role exactness on both slots, not by any plumbing. The next real lift is
+a gazetteer for specific entities (names are the typer's weakest class: person / place / organization confusions),
+which the full-Wikipedia index on Kaggle can supply.

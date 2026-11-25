@@ -55,8 +55,21 @@ class Sentence:
     def case_lemmas(self, i):
         return {self.lemmas[c].lower() for c in self.dep_children(i, "case")}
 
+    LIVE_LEFT = {"DET", "ADJ", "NUM", "PROPN", "NOUN", "ADV"}
+
     def span_of(self, i):
-        """Left edge of the mention headed at i (determiners, modifiers, compounds, flat names)."""
+        """Left edge of the mention headed at i (determiners, modifiers, compounds, flat names).
+        Without a parse (live text) the span is read off the tags: a contiguous run of determiners, adjectives,
+        numbers and nominals to the left, and following proper nouns/numbers when the head is a proper noun."""
+        if self.deprels and all(d == "_" for d in self.deprels):
+            lo = i
+            while lo > 0 and self.upos[lo - 1] in self.LIVE_LEFT and not (self.upos[lo - 1] == "NOUN" and self.upos[i] == "PROPN"):
+                lo -= 1
+            hi = i
+            if self.upos[i] == "PROPN":
+                while hi + 1 < len(self.forms) and self.upos[hi + 1] in ("PROPN", "NUM"):
+                    hi += 1
+            return lo, hi + 1
         lo = i
         hi = i
         for c in self.children.get(i, ()):
