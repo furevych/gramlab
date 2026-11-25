@@ -479,3 +479,8 @@ mostly role-less occurrences.
 *The soldiers were murdered by the rebels* → actor *rebels*, patient *soldiers*; *Maya did not rinse the horse* →
 negated. Still visible: names are class `unknown` until an entity typer lands (delegated), and *Tom gave the cat a
 wash* is read as *give* (the light-verb case stays a miss).
+
+**Kaggle confirmation (`gramlab-core` Version 2, CPU, 574 s, 2026-11-25):** runs 9–11 reproduced from a fresh clone —
+linker 0.884, key 0.830 / 0.708, coreference ranker 0.558 (0.549 locally; SGD/alpha choice noise), live front end
+link F1 0.854 (tagger on 40k sentences, 268 s), event retrieval BM25 0.770 / key 0.922 / hybrid 0.943 recall@1 and
+95.4% decoy separation, identical to the local run. Whole scoreboard plus the end-to-end test: under ten minutes, no GPU.
