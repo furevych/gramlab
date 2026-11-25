@@ -545,3 +545,16 @@ roles-both-right (0.60) × typer² (0.55) ≈ 0.33 for pronoun-free events, and 
 key is now limited by the typer's 74% and by role exactness on both slots, not by any plumbing. The next real lift is
 a gazetteer for specific entities (names are the typer's weakest class: person / place / organization confusions),
 which the full-Wikipedia index on Kaggle can supply.
+
+*Note (12b, tried and rejected):* training the role linker on tagger-tagged AMALGUM instead of parser-tagged, to match
+live conditions, does not help — 60k sentences: parser tags 0.839 live F1, tagger tags 0.837, both 0.854; the
+191k parser-tag model already gives 0.856 live. The live gap to 0.884 is the tagger's own errors on the tokens the
+linker reads, not a mismatch; a better tagger (more training data, or a parser) is the only lever there.
+
+**Gazetteer (committed, awaiting the Kaggle run).** `core/gazetteer.py` derives a name → type table from Wikipedia
+lead sentences with no hand list: head noun after *is a / is the* → WordNet lexicographer class → type (a geographic
+reading in the top three senses wins, then person, then majority). On ten synthetic leads: Belgrade, Serbia, Danube →
+place; Einstein → person; Microsoft, Tesla → organization; World War II → event. The typer takes it as a feature
+(`gaz=<type>`), never as an override. To run it: attach the `gramlab-fullwiki` notebook output as an input to
+`gramlab-core` (it holds `work/bm25_full/passages.jsonl`, 4.96M leads), re-import the notebook, Save & Run All; the
+typing row then reports the typer with and without the gazetteer.
