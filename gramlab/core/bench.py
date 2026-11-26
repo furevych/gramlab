@@ -450,7 +450,7 @@ def run(gum_dir, amalgum_glob=None, vad=None, out_dir="results", train_limit=Non
                     hit += 1
                     ok += gt == m.etype
                     if gt != m.etype and len(wrong) < 12:
-                        wrong.append((m.text, gt, m.etype))
+                        wrong.append((m.text, gt, m.etype, gaz.why(m.text) or gaz.why(s_.forms[g])))
         board["typing"]["gazetteer_diagnostic"] = {"names": n, "hit_rate": round(hit / max(n, 1), 4), "type_accuracy_on_hits": round(ok / max(hit, 1), 4),
                                                    "sample_misses": misses, "sample_wrong": wrong}
         typer = typer_g                       # the occupant when the gazetteer is available

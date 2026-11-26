@@ -106,7 +106,8 @@ def build(passages_path, out_path, wn, limit=None, log_every=500000):
                 continue
             hit += 1
             counts[t] += 1
-            out.write(f"{normalize(bare)}\t{t}\t{plain}\n")
+            clean = 1 if plain and re.fullmatch(r"[A-Za-z0-9 \-']+", bare) else 0     # "Russia" outranks "Russia!"
+            out.write(f"{normalize(bare)}\t{t}\t{plain + clean}\t{title}\n")
             if n % log_every == 0:
                 print(f"[gazetteer] {n:,} passages, {hit:,} typed, {time.time()-t0:.0f}s", flush=True)
     print(f"[gazetteer] done: {n:,} passages, {hit:,} typed ({100*hit/max(n,1):.1f}%), types {dict(counts)}, {time.time()-t0:.0f}s")
@@ -123,21 +124,33 @@ class Gazetteer:
         """Several articles normalize to one name ("Russia", "Russia (song)", "Russia (horse)"): the plain title's
         type wins; without a plain title, the majority over the disambiguated ones."""
         opener = gzip.open if str(path).endswith(".gz") else open
-        plain, votes = {}, {}
+        best, votes = {}, {}            # best: name -> (rank, type, title); rank 2 = clean plain title, 1 = plain, 0 = disambiguated
+        self.source = {}
         with opener(path, "rt", encoding="utf-8") as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
                 if len(p) < 2:
                     continue
                 name, t = p[0], p[1]
-                is_plain = len(p) > 2 and p[2] == "1"
-                if is_plain and name not in plain:
-                    plain[name] = t
+                rank = int(p[2]) if len(p) > 2 and p[2].isdigit() else 0
+                title = p[3] if len(p) > 3 else ""
+                if rank > 0:
+                    if name not in best or rank > best[name][0]:
+                        best[name] = (rank, t, title)
                 else:
-                    votes.setdefault(name, Counter())[t] += 1
-        self.table = {n: c.most_common(1)[0][0] for n, c in votes.items()}
-        self.table.update(plain)
+                    votes.setdefault(name, Counter())[(t, title)] += 1
+        self.table = {}
+        for n, c in votes.items():
+            (t, title), _ = c.most_common(1)[0]
+            self.table[n] = t
+            self.source[n] = title
+        for n, (rank, t, title) in best.items():
+            self.table[n] = t
+            self.source[n] = title
         return self
+
+    def why(self, text):
+        return self.source.get(normalize(text))
 
     def lookup(self, text):
         return self.table.get(normalize(text))
