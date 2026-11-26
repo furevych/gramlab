@@ -120,7 +120,7 @@ def passivize(s, e, syn, vbn):
     return " ".join(out)
 
 
-def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, query_senses=10, front_end=None, live_linker=None):
+def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, query_senses=99, front_end=None, live_linker=None):
     """front_end + live_linker: queries become full-sentence paraphrases (synonym verb, voice flipped), tagged and
     linked live — the query's roles are parsed, not constructed."""
     rng = random.Random(seed)
@@ -211,9 +211,12 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
                 live_stats["no_event"] += 1
                 q_event = Event(0, syn, None, None, "passive", "asserted")
             else:
-                # parsed roles right? compare surface heads with the source's actor/patient head words
-                live_stats["roles_right"] += (q_event.actor.lemma == e.actor.lemma and q_event.patient.lemma == e.patient.lemma)
-                live_stats["roles_swapped"] += (q_event.actor.lemma == e.patient.lemma and q_event.patient.lemma == e.actor.lemma)
+                # parsed roles right? the source's head word must fall inside the predicted mention span (and not the other way round)
+                def inside(mention, head_word):
+                    return head_word.lower() in [w.lower() for w in mention.text.split()]
+                a_ok, p_ok = inside(q_event.actor, s.forms[e.actor.head]), inside(q_event.patient, s.forms[e.patient.head])
+                live_stats["roles_right"] += a_ok and p_ok
+                live_stats["roles_swapped"] += inside(q_event.actor, s.forms[e.patient.head]) and inside(q_event.patient, s.forms[e.actor.head]) and not (a_ok and p_ok)
                 if len(examples_live) < 6:
                     examples_live.append({"source": s.text()[:120], "query": q_text[:120], "parsed": (q_event.actor.text, q_event.action, q_event.patient.text, q_event.voice)})
         else:
@@ -316,7 +319,7 @@ def main(argv=None):
     ap.add_argument("--n", type=int, default=2000)
     ap.add_argument("--out", default="results")
     ap.add_argument("--bonus", type=float, default=3.0)
-    ap.add_argument("--query_senses", type=int, default=10)
+    ap.add_argument("--query_senses", type=int, default=99)
     ap.add_argument("--frontend", default=None, help="frontend.pkl: switch to live full-sentence queries")
     ap.add_argument("--linker", default=None, help="linker.pkl (with --frontend)")
     ap.add_argument("--typer", default=None, help="typer.pkl (optional, with --frontend)")

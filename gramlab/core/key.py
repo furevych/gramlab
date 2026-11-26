@@ -151,14 +151,27 @@ class Keyer:
         return keys
 
     def _slot_ids(self, m, slot, context):
+        """The span's identity plus one per capitalised token of a name ('Russian Dmitry Kokarev' → kokarev,
+        dmitry, russian), so two parsers that pick different heads or spans still meet; at most 4 ids."""
         ids = [slot.id]
-        if m is not None and slot.kind == "specific":
-            m = self.resolve(m, context)
-            head = m.text.split()[-1] if " " in m.text else None
-            if head:
-                hid = self.specific.resolve(head, m.etype)["id"]
-                if hid != slot.id:
+        if m is None:
+            return ids
+        m = self.resolve(m, context)
+        if slot.kind == "specific":
+            toks = [w for w in m.text.split() if w[:1].isupper() and len(w) > 1]
+            for w in reversed(toks[-3:]):
+                hid = self.specific.resolve(w, m.etype)["id"]
+                if hid not in ids:
                     ids.append(hid)
+            # bridge to the general id space when another parser reads the head as a common noun
+            c = self.general.concept(m.lemma, "NOUN")
+            if c["covered"] and c["id"] not in ids:
+                ids.append(c["id"])
+        elif slot.kind == "general" and m.text[:1].isupper():
+            # bridge the other way: a capitalised common noun another parser may read as a name
+            hid = self.specific.resolve(m.text, m.etype)["id"]
+            if hid not in ids:
+                ids.append(hid)
         return ids
 
     def class_triple(self, event: Event, context=None):

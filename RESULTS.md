@@ -602,3 +602,26 @@ parsers (*Álvaro Morata* vs *Morata*) split identities — a head-word identity
 What remains between 0.805 and the 0.92 of constructed roles is the live linker on short passive clauses, and the
 gap to 1.0 is mostly synonym senses outside the posted top-3. BM25 stays the better tie-break inside a candidate
 set; the key is what makes the set small and ordered.
+
+### Run 14b — closing the gap between linker and index (2026-11-25, local CPU)
+
+Diagnosing the queries whose source was missing from the key set (after the three fixes above) found two more causes,
+neither in the linker: (1) **kind mismatch between parsers** — the annotation reads *Media frenzy* as a common noun,
+the tagger as a name; *WHO* is tagged as the pronoun *who*; the two readings lived in different id spaces. Now a
+name also posts the general concept id of its head lemma, and a capitalised common noun also posts a registry id,
+so the spaces meet. (2) **the shared sense beyond the query's top-10** (*have → receive*: the shared synset is
+*receive*'s 11th sense). Query-side lookup now uses all senses; postings stay at the top 3. The roles-right metric
+was also corrected to span agreement (it compared head lemmas, and the live linker often picks another token of the
+same name).
+
+| live paraphrase queries (2,000) | recall@1 | recall@10 | source above decoy | candidate set p50 | µs/query |
+|---|---:|---:|---:|---:|---:|
+| BM25 | 0.697 | 0.930 | 0% | all | 7,000 |
+| key lookup | **0.889** | 0.940 | **94.0%** | 42 | 950 |
+| hybrid | **0.893** | **0.980** | 94.0% | — | 6,400 |
+
+Live linking is right on 93.6% of queries (97.7% of those where an event is found; 84 of 2,000 degenerate
+paraphrases such as *was had by* yield none), and the key set holds the source for 94.0% — the index now captures
+every event the linker gets right. Constructed-role mode with the same settings: key 0.957 recall@1, decoy
+separation 100%, hybrid 0.950. The remaining live gap is the front end (tagger/linker on short passive clauses), and
+BM25's role has shrunk to ordering inside a candidate set that is 42 sentences at the median.
