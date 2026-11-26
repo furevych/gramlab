@@ -682,3 +682,16 @@ source above decoy 95.8%; the source is in the candidate set for 95.8% of querie
 because one-sided proposals recover cases where one role was read wrongly. Scoreboard rows unchanged (linker 0.884,
 key exact 0.830 / 0.708). Index on GUM test: 2,308 occurrences → 2,031 specific, 4,061 family, 5,576 identity and
 41,725 proposal postings.
+
+### Run 13c — gazetteer: conclusion (Version 10, 2026-11-26)
+
+With all fixes (collisions, parentheticals, first-NP head, hypernym-closure typing, wider copula pattern): 3.97M
+titles typed (80.2% of the index), GUM-test names hit 78%, **type accuracy on hits 43%**, and the typer with the
+feature scores 77.1% on names vs 77.7% without — no gain, as in every version. The wrong cases left are not
+parser bugs: *Court* is "any person or institution" in Wikipedia and an organization in GUM; *Russia*, *Sam*, *Reg*
+have no plain article in the 4.96M-lead index (a filtered subset), so a disambiguated article fills the slot;
+*Gibbons* the surname meets *Gibbons (automobile)*. Conclusion: **lead-sentence types are not a usable typing
+signal for GUM's names** — they answer "what is the Wikipedia topic called X" rather than "what is this mention",
+and GUM's mentions (interviewees, fiction characters, courts, petitioners) are mostly not Wikipedia topics. The table
+stays in layer 0 as identity seed data (name → source article → type), which is what `SpecificIndex.load_seed` wants;
+the typer's next lever is more supervised data or a parser, not a gazetteer. Thread closed.
