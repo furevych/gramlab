@@ -778,3 +778,65 @@ above; no claim rests on a leak; the negative results (grammar heads, hypernym f
 as solid as the positive ones (role linker, ordered key on paraphrase/reversal, verified answers). The honest
 one-line summary is unchanged: the ordered event index is exact and cheap where the distinction is who-did-what-to-
 whom, and loses to a bag of words on general questions.
+
+## Run 17 — core-v2 · the soft map: layer-0 sense *distributions* + role slots, weights instead of equality (2026-11-26, local CPU)
+
+**Why.** The Nov-23 design was soft in three places that core-v1 made hard: layer 0 was to be indexation only (every
+candidate id kept), the meaning map was to be learned by regression (map v2, the project's one clear grammar win), and
+matching was to be weighted. core-v1 chose one sense at index time, dropped the map, and matched keys by equality; one
+wrong slot made an event invisible (runs 9c, 16). `gramlab/core/softmap.py` keeps the layers and makes each soft:
+
+- **stage 0** token → distribution over WordNet synsets (SemCor-count prior × sense-order decay, top-4); names/numbers →
+  hashed word ids. Nothing decided.
+- **stage 1** role slots ACTOR / ACTION / PATIENT from the linker (gold relations on the corpus, the learned linker on
+  live queries); all other content words → REST.
+- **stage 2** a 64-dim code per synset, **initialised from the hierarchy** (decayed sum of hashed vectors along the
+  hypernym chain, so siblings start close); token code = sense-weighted mix; slot = mean; sentence = gated concat
+  (256 numbers). Trained contrastively (in-batch negatives, numpy, 47 s on 2 CPUs) on self-paraphrases of 120k AMALGUM
+  sentences: synonym substitution from *any* sense + word dropout → the source. No teacher.
+- **scoring** cosine; hybrid = BM25/max + cosine. Reversal moves words between slots, so it costs two slots.
+
+**Setup.** Held out by document (861 of 4,288 AMALGUM docs; training never sees them). Collection = all 191,546
+sentences + one role-swapped decoy per query (192,244). Queries = 698 held-out sources eligible for the live paraphrase
+(verb synonym from the first sense + voice flip), tagged and linked live (roles right 635/698, no event 44). Same
+construction as run 14b, different split: BM25 here 0.688 vs 0.697 there, so the two query sets are comparable.
+
+| system (698 live queries) | recall@1 | recall@10 | source above decoy |
+|---|---|---|---|
+| BM25 | 0.688 | 0.920 | 0.000 (all tied) |
+| map, bow / synsets (layer 0, no structure) | 0.357 | 0.552 | 0.000 (tied) |
+| map, roles / **first sense** (core-v1's layer 0), untrained | 0.414 | 0.585 | 0.951 |
+| map, roles / most-frequent sense, untrained | 0.456 | 0.609 | 0.960 |
+| map, roles / **sense distribution**, untrained | **0.585** | 0.758 | 0.960 |
+| map, roles / sense distribution, trained | 0.580 | 0.767 | 0.967 |
+| map, roles / words (no layer 0), trained | 0.523 | 0.719 | 0.963 |
+| hybrid BM25 + map, roles / distribution, untrained | **0.842** | **0.966** | 0.957 |
+| hybrid BM25 + map, roles / distribution, trained | 0.830 | 0.956 | 0.967 |
+| *key index, run 14b (all-doc queries, n=2000)* | *0.902* | — | *0.958* |
+
+Sense sanity (verb synsets): hypernym-sibling cosine 0.32 vs random 0.01 before training, 0.29 vs 0.01 after;
+neighbours of `run.v.01` → trot, sprint, romp; of `call.n.01` → telephone, collect call, call-back.
+
+**Findings.**
+1. **Layer 0 as a distribution is worth +17 points over the first sense with no training at all** (0.585 vs 0.414),
+   and +13 over the most frequent sense. This is the direct test of the Nov-23 principle "layer 0 is indexation, not
+   recognition": every sense kept with a weight beats every way of choosing one.
+2. **Structure carries the rest.** Role slots give 96% decoy separation (the key's 95.8%) and 0.58 alone against
+   0.36 for the same codes in one bag; the bag ties on every reversal exactly like BM25.
+3. **The hierarchy initialisation already contains what self-paraphrase training teaches.** Training lifts the hard
+   variant (0.456 → 0.569) and the words-only variant, and leaves the soft variant where it was (0.585 → 0.580). The
+   next gain has to come from an *external* signal (teacher embeddings or question→passage pairs, as in map v2) —
+   that is the Kaggle notebook, not another local epoch.
+4. **Against the key:** the hybrid soft map reaches 0.84 recall@1 against the key's 0.90 on comparable queries, with
+   the same decoy separation, and never has an empty candidate set (the key had none for 44 of these queries' events;
+   the map falls back to the REST bag). Graceful degradation was the point; exactness is still the key's. The natural
+   combination is BM25 + soft map for ranking, key verification on top — not measured yet.
+5. Cost: whole pipeline (featurise 192k sentences, train, encode, score) 229 s on 2 CPUs; the map is 7.5M numbers.
+
+**Caveats.** Queries are still corpus-derived paraphrases (synonym from the first sense; the training substitutions
+come from any sense, so the generators differ but overlap in mechanism). The hybrid weight is 1:1, untuned. SQuAD not
+re-run with the soft map yet; the slot set has no time/place/quantity slots, so the run-16 coverage limit is untouched.
+
+**Next:** (a) Kaggle CPU notebook: same model with teacher regression + question→passage pairs (map v2 recipe) and the
+BM25 + soft map + key-verify three-way; (b) time/place/quantity slots and the SQuAD re-run; (c) typer on Wikipedia
+anchors (the specific-entity half of layer 0).
