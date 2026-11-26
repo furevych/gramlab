@@ -572,3 +572,33 @@ on Kaggle vs 3e-5 locally), not from the table. So the gazetteer feature, as wir
 test names — either the lookups rarely hit GUM's names (which are often people in interviews and fiction, not
 Wikipedia titles) or their types are wrong; a diagnostic (hit rate, type accuracy on hits, sample misses) is in the
 next run. The gazetteer stays in layer 0 as data; it is not yet an improvement.
+
+## Run 14 — event retrieval with *parsed* queries (2026-11-25, local CPU)
+
+Run 10's main caveat was that query roles were constructed. Now the query is a full paraphrase clause built from the
+source (*synonym verb + voice flip*: *Nolito assisted Álvaro Morata* → *Álvaro Morata was helped by Nolito .*),
+tagged, typed and linked by the live front end — the roles the key is built from are the linker's, not ours. Eligible
+sources are active simple-past sentences with contiguous actor–verb–patient (3,581 of 191k); 2,000 used; the
+same reversal decoys as run 10. All 191k AMALGUM sentences indexed as before.
+
+| system | recall@1 | recall@10 | source above its decoy | µs per query |
+|---|---:|---:|---:|---:|
+| BM25 | 0.697 | 0.930 | 0% (tied 100%) | 7,200 |
+| key lookup (family ∪ identity postings) | **0.805** | 0.853 | **84.9%** | **640** |
+| hybrid | **0.872** | **0.975** | 84.9% | 6,100 |
+
+Live query parsing: 87.5% of queries get both roles right, 0.2% swapped, 4.2% no event found; 15 ms per query for
+tagging + typing + linking (the tagger dominates). The key set contains the source for 84.9% of queries — essentially
+every correctly-linked one — so the index no longer loses anything the linker gets right.
+
+Three plumbing fixes were needed to get there, each visible in the numbers: (1) a local identity id used to include
+the entity *type*, so a name typed differently by the live typer and by AMALGUM's annotation got two ids — identity is
+now the name alone, the type is an attribute (identity hits 0.60 → 0.76); (2) the key lookup used family postings only
+— it is now family ∪ identity, and identity keys do not depend on the typer at all; (3) span differences between
+parsers (*Álvaro Morata* vs *Morata*) split identities — a head-word identity is posted beside the full span
+(key recall@1 0.59 → 0.83 on the 300-query pilot). Constructed-role mode re-run after the changes: unchanged
+(0.920 / 0.954 / 0.942).
+
+What remains between 0.805 and the 0.92 of constructed roles is the live linker on short passive clauses, and the
+gap to 1.0 is mostly synonym senses outside the posted top-3. BM25 stays the better tie-break inside a candidate
+set; the key is what makes the set small and ordered.

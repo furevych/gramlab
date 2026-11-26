@@ -131,18 +131,35 @@ class Keyer:
     def identity_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
         """Ordered identity postings: (id(actor), sense, id(patient)) for the same posted senses. Separates
         'Tom washed the cat' from 'the cat washed Tom' even when both slots have the same class.
-        `senses` widens the sense list for lookups (postings stay at self.senses)."""
+        `senses` widens the sense list for lookups (postings stay at self.senses). For specific mentions a second
+        id from the head word alone is posted too, so span differences between parsers ('Álvaro Morata' vs
+        'Morata') still meet."""
         a, p = self.slot(event.actor, context), self.slot(event.patient, context)
+        a_ids = self._slot_ids(event.actor, a, context)
+        p_ids = self._slot_ids(event.patient, p, context)
         all_ss = self.general.synsets(event.action, "VERB")
         ss = list(all_ss[: (senses or self.senses)])
         names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
         keys = []
         for name in names:
-            readable = (a.id, name, p.id)
-            k = stable_id("ident", *[str(x) for x in readable])
-            self.table[k] = readable
-            keys.append(k)
+            for ai in a_ids:
+                for pi in p_ids:
+                    readable = (ai, name, pi)
+                    k = stable_id("ident", *[str(x) for x in readable])
+                    self.table[k] = readable
+                    keys.append(k)
         return keys
+
+    def _slot_ids(self, m, slot, context):
+        ids = [slot.id]
+        if m is not None and slot.kind == "specific":
+            m = self.resolve(m, context)
+            head = m.text.split()[-1] if " " in m.text else None
+            if head:
+                hid = self.specific.resolve(head, m.etype)["id"]
+                if hid != slot.id:
+                    ids.append(hid)
+        return ids
 
     def class_triple(self, event: Event, context=None):
         """(class(actor), action lemma, class(patient)) — the benchmark's comparable form.

@@ -96,7 +96,33 @@ def swap_text(s, e):
     return " ".join(out)
 
 
-def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, query_senses=10):
+def participle_table(sents):
+    """lemma -> most frequent past-participle form, from the training corpus."""
+    c = defaultdict(Counter)
+    for s in sents:
+        for f, l, x in zip(s.forms, s.lemmas, s.xpos):
+            if x == "VBN":
+                c[l.lower()][f.lower()] += 1
+    return {l: v.most_common(1)[0][0] for l, v in c.items()}
+
+
+def passivize(s, e, syn, vbn):
+    """Full-sentence paraphrase of an active 'prefix ACTOR V PATIENT suffix' sentence: 'prefix PATIENT was/were
+    VBN(syn) by ACTOR suffix'. Only for sources where actor span, verb and patient span are contiguous and the verb
+    is simple past; returns None otherwise."""
+    a, p = e.actor, e.patient
+    if e.voice != "active" or s.xpos[e.verb] != "VBD" or a.end != e.verb or p.start != e.verb + 1:
+        return None
+    f = s.forms
+    be = "were" if s.xpos[p.head] in ("NNS", "NNPS") else "was"
+    out = f[p.start:p.end] + [be, vbn, "by"] + f[a.start:a.end] + ["."]       # the clause only, not the rest of the sentence
+    out[0] = out[0][:1].upper() + out[0][1:]
+    return " ".join(out)
+
+
+def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, query_senses=10, front_end=None, live_linker=None):
+    """front_end + live_linker: queries become full-sentence paraphrases (synonym verb, voice flipped), tagged and
+    linked live — the query's roles are parsed, not constructed."""
     rng = random.Random(seed)
     t0 = time.time()
     sents = read_conllu_glob(amalgum_glob)
@@ -105,12 +131,16 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
     pipe = Pipeline(linker=gold, general=general, specific=specific)
     n_occ = pipe.ingest(sents)
     print(f"ingested {len(sents)} sentences, {n_occ} occurrences in {time.time()-t0:.0f}s; {pipe.index.stats()}")
+    live = front_end is not None and live_linker is not None
+    vbn_of = participle_table(sents) if live else {}
 
     # queries from sentences whose main event has nominal roles and a verb with a synonym in its chosen synset
     cands = []
     for si, s in enumerate(sents):
         e = main_event(s, gold)
         if e is None:
+            continue
+        if live and (e.voice != "active" or s.xpos[e.verb] != "VBD" or e.actor.end != e.verb or e.patient.start != e.verb + 1):
             continue
         syns = [w for w in general.synonyms(e.action, "VERB", 50) if " " not in w and w != e.action]
         ss = general.synsets(e.action, "VERB")
@@ -119,6 +149,8 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
         first = set(general._wn.lemmas(*ss[0])) if general._wn is not None else set()
         syn = next((w for w in syns if w in first), None)        # a synonym from the first (posted) sense
         if syn is None:
+            continue
+        if live and syn not in vbn_of:
             continue
         cands.append((si, e, syn))
     rng.shuffle(cands)
@@ -164,10 +196,29 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
     res = {k: Counter() for k in ("bm25", "key", "hybrid")}
     times = defaultdict(list)
     cand_sizes = []
+    live_stats = Counter()
+    examples_live = []
     for si, e, syn in queries:
         s = sents[si]
-        q_text = f"{e.actor.text} {syn} {e.patient.text}"
-        q_event = Event(e.verb, syn, e.actor, e.patient, e.voice, e.status)
+        if live:
+            q_text = passivize(s, e, syn, vbn_of[syn])
+            t = time.time()
+            q_sent = front_end.sentence(q_text.split(), sid="q", doc="q")
+            evs = [x for x in live_linker.link(q_sent) if x.actor and x.patient]
+            live_stats["parse_us"] += (time.time() - t) * 1e6
+            q_event = next((x for x in evs if x.action == syn), None) or next((x for x in evs if x.voice == "passive"), None) or (evs[0] if evs else None)
+            if q_event is None:
+                live_stats["no_event"] += 1
+                q_event = Event(0, syn, None, None, "passive", "asserted")
+            else:
+                # parsed roles right? compare surface heads with the source's actor/patient head words
+                live_stats["roles_right"] += (q_event.actor.lemma == e.actor.lemma and q_event.patient.lemma == e.patient.lemma)
+                live_stats["roles_swapped"] += (q_event.actor.lemma == e.patient.lemma and q_event.patient.lemma == e.actor.lemma)
+                if len(examples_live) < 6:
+                    examples_live.append({"source": s.text()[:120], "query": q_text[:120], "parsed": (q_event.actor.text, q_event.action, q_event.patient.text, q_event.voice)})
+        else:
+            q_text = f"{e.actor.text} {syn} {e.patient.text}"
+            q_event = Event(e.verb, syn, e.actor, e.patient, e.voice, e.status)
         target, decoy = si, decoy_of[si]
 
         t = time.time()
@@ -192,7 +243,11 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
             for st in ("asserted", "negated", "possible"):
                 for i in pipe.index.postings.get(("identity", ik, st), ()):
                     iset.add(sid_to_text[pipe.index.records[i].sid])
+        cset |= iset                       # key lookup = family postings ∪ identity postings
         cand_sizes.append(len(cset))
+        if live:
+            live_stats["target_in_family_set"] += target in cset
+            live_stats["target_in_identity_set"] += target in iset
         if cset:
             cl = np.fromiter(cset, dtype=np.int64)
             korder = cl[np.argsort(-sc[cl], kind="stable")]
@@ -227,6 +282,7 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
 
     n = len(queries)
     board = {"collection": len(texts), "decoys": len(decoy_of), "queries": n, "bonus": bonus, "query_senses": query_senses,
+             "query_mode": "live full-sentence paraphrase (synonym + voice flip), tagged and linked live" if live else "constructed roles",
              "candidate_set_p50_p90_max": [int(np.percentile(cand_sizes, 50)), int(np.percentile(cand_sizes, 90)), int(max(cand_sizes))] if cand_sizes else [],
              "systems": {}}
     for k, c in res.items():
@@ -240,6 +296,14 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
     for si, e, syn in queries[:8]:
         ex.append({"source": sents[si].text()[:140], "query": f"{e.actor.text} {syn} {e.patient.text}", "decoy": texts[decoy_of[si]][:140]})
     board["examples"] = ex
+    if live:
+        board["live_queries"] = {"no_event": live_stats["no_event"], "roles_right": round(live_stats["roles_right"] / n, 4),
+                                 "target_in_family_set": round(live_stats["target_in_family_set"] / n, 4), "target_in_identity_set": round(live_stats["target_in_identity_set"] / n, 4),
+                                 "roles_swapped": round(live_stats["roles_swapped"] / n, 4), "parse_us_per_query": round(live_stats["parse_us"] / n, 0),
+                                 "examples": examples_live}
+        print("live queries", {k: v for k, v in board["live_queries"].items() if k != "examples"})
+        for x in examples_live[:4]:
+            print("   ", x)
     if out_dir:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         (Path(out_dir) / "event_retrieval.json").write_text(json.dumps(board, indent=2))
@@ -253,8 +317,21 @@ def main(argv=None):
     ap.add_argument("--out", default="results")
     ap.add_argument("--bonus", type=float, default=3.0)
     ap.add_argument("--query_senses", type=int, default=10)
+    ap.add_argument("--frontend", default=None, help="frontend.pkl: switch to live full-sentence queries")
+    ap.add_argument("--linker", default=None, help="linker.pkl (with --frontend)")
+    ap.add_argument("--typer", default=None, help="typer.pkl (optional, with --frontend)")
     a = ap.parse_args(argv)
-    run(a.amalgum, a.n, a.out, bonus=a.bonus, query_senses=a.query_senses)
+    fe = lk = None
+    if a.frontend and a.linker:
+        from .tagger import LiveFrontEnd
+        from .linker import BackfillLinker, LearnedLinker
+        typer = None
+        if a.typer:
+            from .typer import EntityTyper
+            typer = EntityTyper.load(a.typer, general=GeneralIndex())
+        fe = LiveFrontEnd.load(a.frontend, typer=typer)
+        lk = BackfillLinker(LearnedLinker.load(a.linker))
+    run(a.amalgum, a.n, a.out, bonus=a.bonus, query_senses=a.query_senses, front_end=fe, live_linker=lk)
 
 
 if __name__ == "__main__":

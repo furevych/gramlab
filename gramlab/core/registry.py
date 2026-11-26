@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -163,11 +163,14 @@ class SpecificIndex:
             self.aliases[hit["id"]].add(text)
             self.mentions[hit["id"]] += 1
             return hit
-        lid = stable_id("local", key, etype)
+        lid = stable_id("local", key)              # identity is the name; the type is an attribute, not part of the id
         entry = self.local.get(lid)
         if entry is None:
-            entry = {"id": lid, "source_id": None, "name": text, "etype": etype, "status": "unresolved"}
+            entry = {"id": lid, "source_id": None, "name": text, "etype": etype, "status": "unresolved", "etypes": Counter()}
             self.local[lid] = entry
+        entry["etypes"][etype] += 1
+        if entry["etypes"].most_common(1)[0][0] != entry["etype"]:
+            entry["etype"] = entry["etypes"].most_common(1)[0][0]
         self.aliases[lid].add(text)
         self.mentions[lid] += 1
         return entry
@@ -176,7 +179,7 @@ class SpecificIndex:
         return self.local.get(sid) or next((e for e in self.seed.values() if e["id"] == sid), None)
 
     def save(self, path):
-        Path(path).write_text(json.dumps({"local": list(self.local.values()),
+        Path(path).write_text(json.dumps({"local": [{k: (dict(v) if isinstance(v, Counter) else v) for k, v in e.items()} for e in self.local.values()],
                                           "aliases": {str(k): sorted(v) for k, v in self.aliases.items()},
                                           "mentions": {str(k): v for k, v in self.mentions.items()}}, indent=1))
 
