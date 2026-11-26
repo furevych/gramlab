@@ -30,7 +30,7 @@ LEX_TO_TYPE = {
     "noun.shape": "abstract", "noun.motive": "abstract", "noun.Tops": "abstract",
 }
 # lead-sentence pattern: "<title> (is|was|were|are) (a|an|the|one of the) [modifiers] <head noun> ..."
-_LEAD = re.compile(r"^(?P<title>.{1,160}?)\s+(?:is|was|were|are)\s+(?:a|an|the|one of the|the name of a|a type of|a kind of)\s+(?P<np>[^.,;:(]{1,80})")
+_LEAD = re.compile(r"^(?P<title>.{1,160}?)\s+(?:is|was|were|are)\s+(?:(?:a|an|the|any|one of the|the name of a|a type of|a kind of|a form of|a species of|a genus of)\s+)?(?P<np>[A-Za-z][^.,;:(]{1,80})")
 _PAREN = re.compile(r"\s*\([^()]*\)")      # "Russia (Russian: Россия, romanized: Rossiya), or the Russian Federation, is a country"
 _WORD = re.compile(r"[A-Za-z][A-Za-z\-]*")
 NAME_HEADS = {"name", "surname", "forename", "given", "nickname", "patronymic"}   # "Jamie is a unisex given name" → person
@@ -66,19 +66,61 @@ def head_noun(np_text, wn):
     return None
 
 
-def type_of_head(head, wn, k=3):
-    """Type from the lexicographer classes of the head noun's first k senses: a geographic reading (noun.location,
-    noun.object) anywhere in the top k wins (countries, villages and rivers are places even where WordNet's first
-    sense is the political group or the natural object), then person, then the majority."""
-    types = [LEX_TO_TYPE.get(wn.lexname("n", off)) for off in wn.synsets(head, "n")[:k]]
-    types = [t for t in types if t]
-    if not types:
+# hypernym anchors: a head noun is typed by the first anchor reached walking up from its top-k senses
+ANCHORS = [("person", "person.n.01"), ("place", "location.n.01"), ("place", "geological_formation.n.01"), ("place", "body_of_water.n.01"),
+           ("organization", "organization.n.01"), ("organization", "group.n.01"), ("animal", "animal.n.01"), ("plant", "plant.n.02"),
+           ("substance", "substance.n.01"), ("substance", "food.n.01"), ("time", "time_period.n.01"), ("time", "time_unit.n.01"),
+           ("event", "event.n.01"), ("event", "act.n.02"), ("object", "artifact.n.01"), ("object", "natural_object.n.01"),
+           ("abstract", "abstraction.n.06"), ("abstract", "psychological_feature.n.01")]
+_anchor_cache = {}
+
+
+def _anchor_offsets(wn):
+    key = id(wn)
+    if key not in _anchor_cache:
+        table = {}
+        for t, name in ANCHORS:
+            lemma, _, num = name.rsplit(".", 2)[0], None, int(name.rsplit(".", 1)[1])
+            ss = wn.synsets(lemma, "n")
+            if len(ss) >= num:
+                table[ss[num - 1]] = t
+        _anchor_cache[key] = table
+    return _anchor_cache[key]
+
+
+def type_of_head(head, wn, k=3, depth=12):
+    """Type by hypernym closure: from each of the head noun's first k senses walk up the hypernym chain and take the
+    first anchor met (person.n.01 → person, location.n.01 → place, organization/group → organization, artifact →
+    object, event/act → event …). Senses vote; a geographic reading wins ties (countries are places even where the
+    first sense is the political group)."""
+    anchors = _anchor_offsets(wn)
+    votes = Counter()
+    first = None
+    for rank, off in enumerate(wn.synsets(head, "n")[:k]):
+        cur, seen = [off], set()
+        found = None
+        for _ in range(depth):
+            nxt = []
+            for o in cur:
+                if o in anchors:
+                    found = anchors[o]
+                    break
+                for h in wn.hypernyms("n", o):
+                    if h not in seen:
+                        seen.add(h)
+                        nxt.append(h)
+            if found or not nxt:
+                break
+            cur = nxt
+        if found:
+            votes[found] += k - rank                  # first sense weighs most
+            first = first or found
+    if not votes:
         return None
-    if "place" in types:
+    top = votes.most_common(1)[0][0]
+    if top == "organization" and "place" in votes:   # country/state/city: the political group vs the territory → place
         return "place"
-    if "person" in types:
-        return "person"
-    return Counter(types).most_common(1)[0][0]
+    return top
 
 
 def build(passages_path, out_path, wn, limit=None, log_every=500000):
