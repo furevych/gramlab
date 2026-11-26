@@ -39,7 +39,8 @@ _norm = re.compile(r"[^a-z0-9 ]+")
 
 def normalize(text):
     t = _norm.sub(" ", text.lower().replace("’", "'"))
-    return " ".join(t.split())
+    t = re.sub(r"^(?:the|a|an)\s+", "", " ".join(t.split()))      # "the United States" → "united states"
+    return t
 
 
 def head_noun(np_text, wn):
