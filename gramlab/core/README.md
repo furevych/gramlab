@@ -43,6 +43,12 @@ with only *John was called.* → unknown; plus did-questions, passives and a syn
 `python -m gramlab.core.bench_retrieval --amalgum '<glob>'` indexes all of AMALGUM through the pipeline and measures
 event retrieval against BM25 with synonym-substituted role queries and role-reversal decoys (run 10 in `RESULTS.md`).
 
+## External benchmark
+
+`python -m gramlab.core.bench_external --squad dev-v1.1.json --frontend … --linker …` — SQuAD v1.1 dev: 10,570
+independently written questions over 2,067 Wikipedia paragraphs ingested live. Run 16 in `RESULTS.md`: the event
+path is below BM25 on this task in both directions (key proposes / BM25 proposes); the reasons are listed there.
+
 ## Run the scoreboard
 
 ```

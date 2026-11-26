@@ -695,3 +695,41 @@ signal for GUM's names** — they answer "what is the Wikipedia topic called X" 
 and GUM's mentions (interviewees, fiction characters, courts, petitioners) are mostly not Wikipedia topics. The table
 stays in layer 0 as identity seed data (name → source article → type), which is what `SpecificIndex.load_seed` wants;
 the typer's next lever is more supervised data or a parser, not a gazetteer. Thread closed.
+
+## Run 16 — the external test: SQuAD v1.1 dev, independently written questions (2026-11-26, local CPU)
+
+Nothing in the core was built from this data. 2,067 Wikipedia paragraphs (48 articles) ingested through the live
+front end in 131 s (12.7 ms per sentence; 10,372 sentences, 25,730 events); 10,570 questions, of which 1,096 are
+who-questions. Score: does the returned sentence contain a gold answer string (the retrieval half of QA).
+
+| | questions | BM25 top-1 | event path top-1 | hybrid (event path, else BM25) |
+|---|---:|---:|---:|---:|
+| all | 10,570 | **0.615** | attempts 7.2% | 0.597 |
+| questions the event path attempts | 759 | **0.710** | 0.461 | — |
+| who-questions | 1,096 | **0.606** | attempts 17% | 0.583 |
+| who-questions it attempts | 190 | **0.679** | 0.547 | — |
+| BM25 proposes top-10, key verifies (attempted) | 1,336 | **0.704** | 0.532 | 0.593 overall |
+
+**The ordered index does not beat a bag of words on independently written questions over real text, in either
+direction.** Where it answers, it is 15–25 points behind BM25 on the very questions it chose. Four reasons, all
+visible in the examples:
+
+1. *Coverage.* Only 7% of questions are event-shaped and readable (who / what / which + a verb + one named
+   participant). Where, when, how-many, what-is questions ask for things the event record does not hold.
+2. *Extraction recall.* The paragraph says *The Panthers beat the Seahawks …* and *The Panthers then beat the Arizona
+   Cardinals 49–15 in the NFC Championship Game*; the linker extracted the first event only, so the index answered
+   *Seahawks* with confidence. One missed event turns a precise index into a confidently wrong one; BM25 degrades
+   gracefully because it never commits to a structure.
+3. *The rest of the question is evidence.* The key matches on verb + one participant and discards *NFC Championship
+   Game*, which is exactly what disambiguates. Ranking verified candidates by BM25 helped (0.42 → 0.46) but cannot
+   recover candidates the structure never proposed.
+4. *Answers are rarely participants.* SQuAD's spans are dates, numbers, places, noun phrases inside clauses; the
+   bound role string matches the gold answer for only 28% of attempted questions (47% on who-questions).
+
+What this does and does not overturn. Runs 10 and 14 stand: when the distinction *is* who-did-what-to-whom (role
+reversal, synonym verbs), the ordered key is exact and cheap where BM25 is blind, and it answers *unknown* where text
+is silent. Run 16 shows that this is a narrow strength: on a general question set the structure's precision is paid
+for with recall at every stage (reader 7%, linker ~60% both roles, typer 77%), and a bag of words wins on the
+average question. The honest position for the architecture is a **verifier and tie-breaker beside a lexical or
+dense retriever** — invoked when candidates agree on words and differ in roles, or when the question is explicitly
+about an agent or a patient — not a replacement for retrieval.

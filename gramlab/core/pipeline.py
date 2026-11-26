@@ -76,43 +76,66 @@ class Pipeline:
         return {"actor": r.actor.__dict__, "action": r.action, "sense": r.sense, "alt_senses": list(r.alt_senses),
                 "patient": r.patient.__dict__, "voice": r.voice, "status": r.status, "force": self.affect.force(e)}
 
-    def ask(self, question: str, limit=10):
+    WH_PRON = {"who", "whom", "whose", "what", "which"}
+    NOT_EVENT_WH = {"where", "when", "why", "how", "whence"}
+
+    def ask(self, question: str, limit=10, rank=None):
         """A question in words, through the same front end and linker as the text: 'Who called John?',
-        'Who did Tom call?', 'Who was called by Tom?', 'What did Tom wash?'. The wh-word marks the requested role;
-        the other role is the given participant, verified against the stored binding. Returns index.ask()'s list,
-        or {"error": ...} when no event can be read from the question."""
+        'Who did Tom call?', 'Who was called by Tom?', 'What did Tom wash?', 'Which network broadcast the game?'.
+        The wh-word (or the noun phrase it determines) marks the requested role; the other role is the given
+        participant, verified against the stored binding. Where/when/why/how questions ask for something the event
+        record does not hold and are not attempted. Returns index.ask()'s list, or {"error": ...}."""
         if self.front_end is None:
             raise RuntimeError("no front end: pass front_end=LiveFrontEnd.load(...) to read questions")
         from .tagger import tokenize
         words = tokenize(question.rstrip("?").strip() + " .")
-        WH = {"who", "whom", "what", "which"}
-        s = self.front_end.sentence(words, sid="q", doc="q")
-        # "Who did Tom call ?" → the linker sees an inverted clause; normalise the common shapes first
         low = [w.lower() for w in words]
-        if len(low) > 3 and low[0] in WH and low[1] in ("did", "does", "do"):
-            # Who did X call → X did call Who   (the auxiliary keeps the verb a verb for the tagger)
-            words2 = words[2:-1]
-            # subject = everything up to the last token (the bare verb)
-            words2 = words2[:-1] + [words[1], words2[-1], words[0], "."]
-            s = self.front_end.sentence(words2, sid="q", doc="q")
-            low = [w.lower() for w in words2]
+        if not words or low[0] in self.NOT_EVENT_WH or not any(w in self.WH_PRON for w in low):
+            return {"error": "not an event question", "tokens": words}
+        # inversion: "Who did X call ?" → "X did call Who ."   /  "Which team did X beat ?" → "X did beat Which team ."
+        wh_end = 1
+        if low[0] in ("which", "what", "whose") and len(low) > 2 and low[1] not in ("did", "does", "do", "is", "was", "were", "are", "has", "have", "had"):
+            while wh_end < len(low) - 1 and low[wh_end] not in ("did", "does", "do", "is", "was", "were", "are", "has", "have", "had") and \
+                    not (self.front_end.tagger.tag([words[wh_end]])[0][0] == "VERB"):
+                wh_end += 1
+        wh_phrase = words[:wh_end]
+        if len(wh_phrase) > 1 and self.front_end.typer is not None:
+            # "what city / which year / what venue": the requested thing is a place or a time, which the event
+            # record does not hold — decline rather than answer with a participant
+            probe = self.front_end.sentence(wh_phrase[1:] + ["."], sid="q", doc="q")
+            heads = [i for i in range(len(probe)) if probe.upos[i] in ("NOUN", "PROPN")]
+            if heads and (probe.ents[heads[-1]] in ("place", "time") or probe.lemmas[heads[-1]] in ("city", "country", "state", "year", "venue", "town", "place", "location", "region", "date", "decade", "century")):
+                return {"error": "asks for a place or time", "tokens": words}
+        rest = words[wh_end:]
+        if rest and rest[0].lower() in ("did", "does", "do") and len(rest) > 2:
+            aux, body = rest[0], rest[1:-1]
+            words2 = body[:-1] + [aux, body[-1]] + wh_phrase + ["."]
+        else:
+            words2 = words
+        s = self.front_end.sentence(words2, sid="q", doc="q")
         events = [e for e in self.linker.link(s) if e.actor or e.patient]
         if not events:
-            return {"error": "no event read from the question", "tokens": words}
+            return {"error": "no event read from the question", "tokens": words2}
         e = max(events, key=lambda x: (x.actor is not None) + (x.patient is not None))
+
         def role(m):
             if m is None:
                 return None
-            return "?" if m.text.lower() in WH else m.text
+            toks = [w.lower() for w in m.text.split()]
+            return "?" if (toks and (toks[0] in self.WH_PRON or toks[-1] in self.WH_PRON)) else m.text
         actor, patient = role(e.actor), role(e.patient)
         if actor is None and patient != "?":
             actor = "?"
         if patient is None and actor != "?":
             patient = "?"
         if actor != "?" and patient != "?":
-            actor = "?"                                           # default: ask for the actor
+            # neither mention carries the wh-word (it was outside the linker's spans): the requested role is the
+            # one that is not the given participant named in the question
+            actor = "?"
+        if actor == "?" and patient == "?":
+            return {"error": "no given participant", "tokens": words2}
         return {"question": {"actor": actor, "action": e.action, "patient": patient, "voice": e.voice},
-                "answers": self.index.ask(e.action, actor=actor, patient=patient, limit=limit)}
+                "answers": self.index.ask(e.action, actor=actor, patient=patient, limit=limit, rank=rank)}
 
     def answer(self, question: str, k=5):
         passages = self.index.search(question, k)
