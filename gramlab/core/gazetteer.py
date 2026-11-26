@@ -43,14 +43,22 @@ def normalize(text):
     return t
 
 
+STOP_NP = {"of", "in", "for", "from", "by", "on", "at", "with", "to", "that", "which", "who", "whose", "and", "or", "but",
+           "located", "based", "known", "founded", "born", "named", "used", "made", "played", "situated", "headquartered"}
+
+
 def head_noun(np_text, wn):
-    """The last word of the noun phrase that WordNet knows as a noun (skips adjectives like 'American',
-    'largest'; stops at a preposition)."""
+    """Head of the first noun phrase: the last WordNet noun in the initial run of words before a preposition,
+    conjunction, relative pronoun or participle ('American multinational technology company headquartered in'
+    → company; 'country spanning Eastern Europe and North Asia' → country)."""
     words = []
     for w in np_text.split():
         lw = w.lower().strip("'\"")
-        if lw in ("of", "in", "for", "from", "by", "on", "at", "with", "that", "which", "who", "located", "based", "known", "founded", "born"):
+        if lw in STOP_NP:
             break
+        is_noun = bool(_WORD.fullmatch(lw)) and bool(wn.synsets(lw, "n"))
+        if not is_noun and (lw.endswith("ing") or lw.endswith("ed")) and words:
+            break                                   # a participle after at least one word closes the phrase
         words.append(lw)
     for w in reversed(words):
         if _WORD.fullmatch(w) and wn.synsets(w, "n"):
