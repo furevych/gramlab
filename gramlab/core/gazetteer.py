@@ -32,6 +32,7 @@ LEX_TO_TYPE = {
 # lead-sentence pattern: "<title> (is|was|were|are) (a|an|the|one of the) [modifiers] <head noun> ..."
 _LEAD = re.compile(r"^(?P<title>.{1,80}?)\s+(?:is|was|were|are)\s+(?:a|an|the|one of the|the name of a|a type of|a kind of)\s+(?P<np>[^.,;:(]{1,80})")
 _WORD = re.compile(r"[A-Za-z][A-Za-z\-]*")
+NAME_HEADS = {"name", "surname", "forename", "given", "nickname", "patronymic"}   # "Jamie is a unisex given name" → person
 _norm = re.compile(r"[^a-z0-9 ]+")
 
 
@@ -89,18 +90,19 @@ def build(passages_path, out_path, wn, limit=None, log_every=500000):
             if not title or not text:
                 continue
             bare = re.sub(r"\s*\([^)]*\)\s*$", "", title)
+            plain = 1 if bare == title else 0                 # "Russia" vs "Russia (song)": plain titles win at load time
             m = _LEAD.match(text[:400])
             if not m:
                 continue
             head = head_noun(m.group("np"), wn)
             if not head:
                 continue
-            t = type_of_head(head, wn)
+            t = "person" if head in NAME_HEADS else type_of_head(head, wn)
             if not t:
                 continue
             hit += 1
             counts[t] += 1
-            out.write(f"{normalize(bare)}\t{t}\n")
+            out.write(f"{normalize(bare)}\t{t}\t{plain}\n")
             if n % log_every == 0:
                 print(f"[gazetteer] {n:,} passages, {hit:,} typed, {time.time()-t0:.0f}s", flush=True)
     print(f"[gazetteer] done: {n:,} passages, {hit:,} typed ({100*hit/max(n,1):.1f}%), types {dict(counts)}, {time.time()-t0:.0f}s")
@@ -114,12 +116,23 @@ class Gazetteer:
             self.load(path)
 
     def load(self, path):
+        """Several articles normalize to one name ("Russia", "Russia (song)", "Russia (horse)"): the plain title's
+        type wins; without a plain title, the majority over the disambiguated ones."""
         opener = gzip.open if str(path).endswith(".gz") else open
+        plain, votes = {}, {}
         with opener(path, "rt", encoding="utf-8") as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
-                if len(p) == 2 and p[0] not in self.table:        # first (plain-title) entry wins
-                    self.table[p[0]] = p[1]
+                if len(p) < 2:
+                    continue
+                name, t = p[0], p[1]
+                is_plain = len(p) > 2 and p[2] == "1"
+                if is_plain and name not in plain:
+                    plain[name] = t
+                else:
+                    votes.setdefault(name, Counter())[t] += 1
+        self.table = {n: c.most_common(1)[0][0] for n, c in votes.items()}
+        self.table.update(plain)
         return self
 
     def lookup(self, text):
