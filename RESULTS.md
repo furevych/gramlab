@@ -625,3 +625,28 @@ paraphrases such as *was had by* yield none), and the key set holds the source f
 every event the linker gets right. Constructed-role mode with the same settings: key 0.957 recall@1, decoy
 separation 100%, hybrid 0.950. The remaining live gap is the front end (tagger/linker on short passive clauses), and
 BM25's role has shrunk to ordering inside a candidate set that is 42 sentences at the median.
+
+### Run 13b — what the gazetteer diagnostic found (Versions 5–9, 2026-11-25/26)
+
+The diagnostic row (hit rate and type accuracy on GUM-test names, with the article behind each wrong entry) turned
+a null result into four specific causes, three of them mine:
+
+1. **Collisions.** All titles that normalise to one name (*Russia*, *Russia (song)*, *Russia (horse)*) collapsed
+   to the first in file order. Fixed: plain titles win, majority otherwise. Type accuracy on hits 31% → 44%.
+2. **Lead parentheticals** pushed the copula past the title window (*Russia (Russian: Россия, …), or the Russian
+   Federation, is a country*). Fixed: parentheticals stripped before matching; *United States* now right; typed
+   coverage 71.8% → 78.0% of articles.
+3. **Head-noun selection** walked to the last noun of the phrase (*country spanning Eastern Europe and North Asia →
+   Asia*) and lexicographer files put *person* under the top category (*A petitioner is a person who … → abstract*).
+   Fixed: head of the first noun phrase, and typing by hypernym closure (is it a kind of person / location / group /
+   artifact / event …) with rank-weighted senses.
+4. **The index itself.** The probe found no article titled *Russia*, *Sam*, *Brahms* or *Language* in the 4.96M-lead
+   file: the full-Wikipedia index behind Level 1 is a filtered subset, so for such names only disambiguated articles
+   exist and a wrong one fills the slot. That is a property of the index, not of the gazetteer; the lead filter in
+   `kaggle_fullwiki` should be revisited.
+
+Through Version 9 the typer with the gazetteer stayed within noise of the typer without it (77–78% on names): with
+only 42–44% of hits typed correctly the model learns to discount the feature. Version 10 carries fixes 2–3; whatever
+it reports, the gazetteer's firm value is as layer-0 identity data (3.8M names with a source article each), and GUM's
+test names — interview subjects, fiction characters, Senegalese language names — are largely not Wikipedia titles
+(hit rate 76%, misses are exactly those).
