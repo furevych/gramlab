@@ -650,3 +650,35 @@ only 42–44% of hits typed correctly the model learns to discount the feature. 
 it reports, the gazetteer's firm value is as layer-0 identity data (3.8M names with a source article each), and GUM's
 test names — interview subjects, fiction characters, Senegalese language names — are largely not Wikipedia titles
 (hit rate 76%, misses are exactly those).
+
+## Run 15 — one resolved record, verified answers, questions through the map (2026-11-26, local CPU)
+
+Three architecture changes, adopted from an external review of commit 83b4358 after checking each against the code:
+
+1. **One `ResolvedEvent` per occurrence.** Before, the specific key, the family keys and the identity keys resolved
+   pronouns and the verb sense along different paths, and `describe()` rebuilt keys without the indexing context,
+   so the record, the indices and the explanation could disagree. Now the keyer resolves an event once — bindings
+   with a state (*known / unresolved / omitted*), the chosen sense and its alternatives — every key is derived from
+   that record, and `describe()` shows the stored record.
+2. **"Might match" is separated from "is the same entity".** Identity keys are strict (both bindings known, their own
+   ids); the permissive keys — name tokens (*Morata* for *Álvaro Morata*), bridged id spaces, one-sided keys — are a
+   separate *proposal* level that only nominates candidates. A specific answer is verified against the stored
+   binding (identity id, else the written name; a bare surname matches only as the last token of the stored name).
+3. **The normal question path uses the map.** `Pipeline.ask("Who called John?")` reads the question with the same
+   front end and linker as the text, marks the wh-role as requested, finds candidates through the given participant's
+   postings, verifies, and returns the bound role with its source sentence; an unresolved or omitted role answers
+   *unknown* — requested and missing are distinct states.
+
+Milestone (`python -m gramlab.core.selftest`, raw text through `ingest_text`, 8 checks): *Who called John? → Tom*
+with *Tom called John*; *Who called Tom? → John*; *Who did Tom call? → John*; *Who was called by Tom? → John*; with
+only *John was called.* indexed, *Who called John? → unknown*; *Who washed the cat? → Tom*; *What did the cat wash?
+→ Tom* (the reversed pair shares PERSON → WASH → ANIMAL, the binding decides); *Who washed the dog? → Maya* from
+*Maya rinsed the dog* (synonym verb at the question side). **8/8 pass.** Two bugs fell out on the way: the lemmatizer's
+suffix rule produced *rins* for *rinsed* (now checks candidates against the lemma vocabulary), and did-questions need
+the auxiliary kept so the tagger sees a verb.
+
+Retrieval (run 14b setting, live paraphrase queries, 2,000): key recall@1 **0.904** (was 0.889), recall@10 0.987,
+source above decoy 95.8%; the source is in the candidate set for 95.8% of queries, now above the 93.6% roles-right
+because one-sided proposals recover cases where one role was read wrongly. Scoreboard rows unchanged (linker 0.884,
+key exact 0.830 / 0.708). Index on GUM test: 2,308 occurrences → 2,031 specific, 4,061 family, 5,576 identity and
+41,725 proposal postings.

@@ -130,28 +130,48 @@ class Lemmatizer:
 
     def __init__(self):
         self.table = {}
+        self.known = set()          # every lemma seen in training: the suffix rules pick a candidate that exists
 
     def fit(self, sents, min_count=1):
         c = defaultdict(Counter)
         for s in sents:
             for f, l, x in zip(s.forms, s.lemmas, s.xpos):
                 c[(f.lower(), x)][l.lower()] += 1
+                self.known.add(l.lower())
         self.table = {k: v.most_common(1)[0][0] for k, v in c.items() if sum(v.values()) >= min_count}
         return self
+
+    def _pick(self, cands, default):
+        for cnd in cands:
+            if cnd in self.known:
+                return cnd
+        return default
 
     def lemma(self, form, xpos):
         lw = form.lower()
         hit = self.table.get((lw, xpos))
         if hit:
             return hit
-        if xpos in ("NNS", "NNPS") and lw.endswith("s") and len(lw) > 3:
-            return lw[:-3] + "y" if lw.endswith("ies") else lw[:-2] if lw.endswith(("sses", "shes", "ches", "xes")) else lw[:-1]
-        if xpos == "VBZ" and lw.endswith("s"):
-            return lw[:-3] + "y" if lw.endswith("ies") else lw[:-2] if lw.endswith(("sses", "shes", "ches", "xes")) else lw[:-1]
+        if xpos in ("NNS", "NNPS", "VBZ") and lw.endswith("s") and len(lw) > 3:
+            if lw.endswith("ies"):
+                return self._pick([lw[:-3] + "y", lw[:-1]], lw[:-3] + "y")
+            if lw.endswith(("sses", "shes", "ches", "xes", "zes")):
+                return self._pick([lw[:-2], lw[:-1]], lw[:-2])
+            return self._pick([lw[:-1], lw[:-2]], lw[:-1])
         if xpos in ("VBD", "VBN") and lw.endswith("ed") and len(lw) > 4:
-            return lw[:-3] + "y" if lw.endswith("ied") else lw[:-2]
+            if lw.endswith("ied"):
+                return self._pick([lw[:-3] + "y", lw[:-1]], lw[:-3] + "y")
+            stem = lw[:-2]
+            cands = [stem, stem + "e"]
+            if len(stem) > 2 and stem[-1] == stem[-2]:
+                cands.append(stem[:-1])                    # stopped → stop
+            return self._pick(cands, stem)
         if xpos == "VBG" and lw.endswith("ing") and len(lw) > 5:
-            return lw[:-3]
+            stem = lw[:-3]
+            cands = [stem, stem + "e"]
+            if len(stem) > 2 and stem[-1] == stem[-2]:
+                cands.append(stem[:-1])
+            return self._pick(cands, stem)
         return lw
 
 

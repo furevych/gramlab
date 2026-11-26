@@ -167,16 +167,15 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
         texts.append(d_text)
         decoy_of[si] = d_id
         swapped = Event(e.verb, e.action, e.patient, e.actor, e.voice, e.status)
-        # index the decoy under the swapped event: specific/family keys computed from swapped roles
-        sk, fks, iks = pipe.keyer.specific_key(swapped), pipe.keyer.family_keys(swapped), pipe.keyer.identity_keys(swapped)
+        # index the decoy under the swapped event, through the same resolution path as real occurrences
+        rs = pipe.keyer.resolve_event(swapped, s)
+        keys = pipe.keyer.keys_from(rs)
         from .records import Occurrence
-        occ = Occurrence(swapped, d_text, s.doc, s.sid + "#decoy", sk, fks[0])
+        occ = Occurrence(swapped, rs, d_text, s.doc, s.sid + "#decoy", keys["specific"][0], keys["family"][0])
         pipe.index.records.append(occ)
-        pipe.index.postings[("specific", sk, swapped.status)].append(d_id)
-        for fk in fks:
-            pipe.index.postings[("family", fk, swapped.status)].append(d_id)
-        for ik in iks:
-            pipe.index.postings[("identity", ik, swapped.status)].append(d_id)
+        for level in ("specific", "family", "identity", "proposal"):
+            for k in keys[level]:
+                pipe.index.postings[(level, k, rs.status)].append(d_id)
     # occurrence ids == sentence ids only if every sentence yielded exactly one occurrence; build sentence->occurrence map
     occ_sent = {}
     for i, o in enumerate(pipe.index.records):
@@ -235,17 +234,17 @@ def run(amalgum_glob, n_queries=2000, out_dir="results", seed=0, bonus=3.0, quer
         res["bm25"]["tie"] += sc[decoy] == sc[target]
 
         t = time.time()
-        fks = pipe.keyer.family_keys(q_event, senses=query_senses)
-        iks = pipe.keyer.identity_keys(q_event, senses=query_senses)
+        qkeys = pipe.keyer.keys_from(pipe.keyer.resolve_event(q_event), query=(query_senses > pipe.keyer.senses))
         cset, iset = set(), set()
-        for fk in fks:
+        for fk in qkeys["family"]:
             for st in ("asserted", "negated", "possible"):
                 for i in pipe.index.postings.get(("family", fk, st), ()):
                     cset.add(sid_to_text[pipe.index.records[i].sid])
-        for ik in iks:
-            for st in ("asserted", "negated", "possible"):
-                for i in pipe.index.postings.get(("identity", ik, st), ()):
-                    iset.add(sid_to_text[pipe.index.records[i].sid])
+        for level in ("identity", "proposal"):
+            for ik in qkeys[level]:
+                for st in ("asserted", "negated", "possible"):
+                    for i in pipe.index.postings.get((level, ik, st), ()):
+                        iset.add(sid_to_text[pipe.index.records[i].sid])
         cset |= iset                       # key lookup = family postings ∪ identity postings
         cand_sizes.append(len(cset))
         if live:

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .records import Event, Mention
+from .records import Binding, Event, Mention, ResolvedEvent
 from .registry import GeneralIndex, SpecificIndex, stable_id
 
 KEY_VERSION = "key-v1"
@@ -90,89 +90,102 @@ class Keyer:
     def action(self, event: Event):
         return self.general.concept(event.action, "VERB")
 
-    def specific_key(self, event: Event, context=None) -> int:
-        a, p = self.slot(event.actor, context), self.slot(event.patient, context)
-        act = self.action(event)
-        readable = ((a.kind, a.cls, a.id), act["name"], (p.kind, p.cls, p.id), event.status)
-        k = stable_id("key", *[str(x) for x in readable])
-        self.table[k] = readable
-        return k
+    # ------------------------------------------------------------------ one resolved record per occurrence
+    def binding(self, m: Mention | None, context=None) -> Binding:
+        if m is None:
+            return Binding("omitted", "missing", "missing", 0, "", "")
+        r = self.resolve(m, context)
+        sl = self.slot(m, context)
+        state = "unresolved" if sl.kind == "pronoun" else "known"
+        return Binding(state, sl.kind, sl.cls, sl.id, r.text, r.lemma)
 
-    def family_key(self, event: Event) -> int:
-        a, p = self.slot(event.actor), self.slot(event.patient)
-        act = self.action(event)
-        readable = (a.cls, act["family_name"], p.cls)
-        k = stable_id("fam", *readable)
-        self.table[k] = readable
-        return k
-
-    def family_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
-        """One family key per posted sense of the action: (class(actor), sense, class(patient)).
-        Posting under several senses links synonyms (wash.v.03 ~ rinse) without collapsing verbs into one
-        wrong hypernym family (run 9b/9c). With a sense picker and the sentence, the chosen sense comes first
-        and is the occurrence's family_key; the top-k by WordNet order fill the rest."""
-        a, p = self.slot(event.actor, context), self.slot(event.patient, context)
+    def senses_of(self, event: Event, sent=None, n=None) -> list:
+        """Posted senses for the action, chosen sense first (sense picker when a sentence is given)."""
         all_ss = self.general.synsets(event.action, "VERB")
-        ss = list(all_ss[: (senses or self.senses)])
+        ss = list(all_ss[: (n or self.senses)])
         if self.sense_picker is not None and sent is not None and len(all_ss) > 1:
             chosen = self.sense_picker.pick(event.action, "v", self.as_semcor(sent), event.verb)
             if chosen is not None:
                 chosen = ("v", chosen) if not isinstance(chosen, tuple) else chosen
-                ss = [chosen] + [x for x in ss if x != chosen][: max(self.senses - 1, 0)]
-        names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
-        keys = []
-        for name in names:
-            readable = (a.cls, name, p.cls)
-            k = stable_id("fam", *readable)
-            self.table[k] = readable
-            keys.append(k)
-        return keys
+                ss = [chosen] + [x for x in ss if x != chosen][: max((n or self.senses) - 1, 0)]
+        names = [self.general._name(x) for x in ss]
+        return names or [self.action(event)["family_name"]]
 
-    def identity_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
-        """Ordered identity postings: (id(actor), sense, id(patient)) for the same posted senses. Separates
-        'Tom washed the cat' from 'the cat washed Tom' even when both slots have the same class.
-        `senses` widens the sense list for lookups (postings stay at self.senses). For specific mentions a second
-        id from the head word alone is posted too, so span differences between parsers ('Álvaro Morata' vs
-        'Morata') still meet."""
-        a, p = self.slot(event.actor, context), self.slot(event.patient, context)
-        a_ids = self._slot_ids(event.actor, a, context)
-        p_ids = self._slot_ids(event.patient, p, context)
-        all_ss = self.general.synsets(event.action, "VERB")
-        ss = list(all_ss[: (senses or self.senses)])
-        names = [self.general._name(x) for x in ss] or [self.action(event)["family_name"]]
-        keys = []
-        for name in names:
-            for ai in a_ids:
-                for pi in p_ids:
-                    readable = (ai, name, pi)
-                    k = stable_id("ident", *[str(x) for x in readable])
-                    self.table[k] = readable
-                    keys.append(k)
-        return keys
+    def resolve_event(self, event: Event, sent=None, context=None) -> ResolvedEvent:
+        senses = self.senses_of(event, sent)
+        return ResolvedEvent(self.binding(event.actor, context), event.action, senses[0], tuple(senses[1:]),
+                             self.binding(event.patient, context), event.voice, event.status)
 
-    def _slot_ids(self, m, slot, context):
-        """The span's identity plus one per capitalised token of a name ('Russian Dmitry Kokarev' → kokarev,
-        dmitry, russian), so two parsers that pick different heads or spans still meet; at most 4 ids."""
-        ids = [slot.id]
-        if m is None:
+    def _ids_of(self, b: Binding, permissive: bool) -> list:
+        """Strict: the binding's own id, only when known. Permissive (proposals): name tokens and the bridge to
+        the other id space, so another parser's reading of the same mention still meets this one."""
+        if b.state != "known":
+            return [] if not permissive else []
+        ids = [b.id]
+        if not permissive:
             return ids
-        m = self.resolve(m, context)
-        if slot.kind == "specific":
-            toks = [w for w in m.text.split() if w[:1].isupper() and len(w) > 1]
+        if b.kind == "specific":
+            toks = [w for w in b.text.split() if w[:1].isupper() and len(w) > 1]
             for w in reversed(toks[-3:]):
-                hid = self.specific.resolve(w, m.etype)["id"]
+                hid = self.specific.resolve(w, b.cls)["id"]
                 if hid not in ids:
                     ids.append(hid)
-            # bridge to the general id space when another parser reads the head as a common noun
-            c = self.general.concept(m.lemma, "NOUN")
+            c = self.general.concept(b.lemma, "NOUN")
             if c["covered"] and c["id"] not in ids:
                 ids.append(c["id"])
-        elif slot.kind == "general" and m.text[:1].isupper():
-            # bridge the other way: a capitalised common noun another parser may read as a name
-            hid = self.specific.resolve(m.text, m.etype)["id"]
+        elif b.kind == "general" and b.text[:1].isupper():
+            hid = self.specific.resolve(b.text, b.cls)["id"]
             if hid not in ids:
                 ids.append(hid)
         return ids
+
+    def keys_from(self, r: ResolvedEvent, query=False) -> dict:
+        """All keys of a resolved event. specific: one id for the exact record. family: (class, sense, class) per
+        posted sense. identity: (id, sense, id), strict — both bindings known. proposal: permissive identity keys
+        (name tokens, bridged ids) that may match a different entity and must be verified before being believed.
+        query=True widens the senses to all of the verb's senses (lookups), postings keep the top ones."""
+        senses = [r.sense] + list(r.alt_senses)
+        all_names = [self.general._name(x) for x in self.general.synsets(r.action, "VERB")]
+        id_senses = senses + [n for n in all_names if n not in senses]     # identity/proposal keys: all senses (ids keep them specific)
+        if query:
+            senses = id_senses
+        a, p = r.actor, r.patient
+        out = {"specific": [], "family": [], "identity": [], "proposal": []}
+        readable = ((a.kind, a.cls, a.id), r.sense, (p.kind, p.cls, p.id), r.status)
+        k = stable_id("key", *[str(x) for x in readable]); self.table[k] = readable; out["specific"].append(k)
+        a_strict, p_strict = self._ids_of(a, False), self._ids_of(p, False)
+        a_perm, p_perm = self._ids_of(a, True), self._ids_of(p, True)
+        for name in senses:
+            fr = (a.cls, name, p.cls)
+            k = stable_id("fam", *fr); self.table[k] = fr; out["family"].append(k)
+        for name in id_senses:
+            for ai in a_strict:
+                for pi in p_strict:
+                    ir = (ai, name, pi); k = stable_id("ident", *[str(x) for x in ir]); self.table[k] = ir; out["identity"].append(k)
+            for ai in a_perm:
+                for pi in p_perm:
+                    ir = (ai, name, pi); k = stable_id("ident", *[str(x) for x in ir])
+                    if k not in out["identity"]:
+                        self.table[k] = ir; out["proposal"].append(k)
+            # one-sided proposals: the given role known, the other requested/omitted (question lookups)
+            for ai in a_perm:
+                ir = (ai, name, "*"); k = stable_id("ident", *[str(x) for x in ir]); self.table[k] = ir; out["proposal"].append(k)
+            for pi in p_perm:
+                ir = ("*", name, pi); k = stable_id("ident", *[str(x) for x in ir]); self.table[k] = ir; out["proposal"].append(k)
+        return out
+
+    def specific_key(self, event: Event, context=None) -> int:
+        return self.keys_from(self.resolve_event(event, None, context))["specific"][0]
+
+    def family_key(self, event: Event) -> int:
+        return self.keys_from(self.resolve_event(event))["family"][0]
+
+    def family_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
+        return self.keys_from(self.resolve_event(event, sent, context), query=bool(senses and senses > self.senses))["family"]
+
+    def identity_keys(self, event: Event, sent=None, context=None, senses=None) -> list:
+        k = self.keys_from(self.resolve_event(event, sent, context), query=bool(senses and senses > self.senses))
+        return k["identity"] + k["proposal"]
 
     def class_triple(self, event: Event, context=None):
         """(class(actor), action lemma, class(patient)) — the benchmark's comparable form.

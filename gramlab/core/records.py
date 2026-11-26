@@ -123,9 +123,37 @@ class Event:
 
 
 @dataclass(frozen=True)
+class Binding:
+    """One role of a resolved event. state: known (identity resolved to a name or concept), unresolved (a pronoun
+    no antecedent was found for), omitted (the sentence has no such participant). kind/cls/id as in the key's Slot;
+    text is the mention as written (after coreference, the antecedent's text)."""
+    state: str
+    kind: str
+    cls: str
+    id: int
+    text: str
+    lemma: str
+
+
+@dataclass(frozen=True)
+class ResolvedEvent:
+    """The meaning of one occurrence, computed once at indexing time; every key, lookup and explanation reads it.
+    sense = the synset chosen for the action (by the sense picker, else WordNet's first); alt_senses = the other
+    posted senses, labelled as alternatives for broad search."""
+    actor: Binding
+    action: str
+    sense: str
+    alt_senses: tuple
+    patient: Binding
+    voice: str
+    status: str
+
+
+@dataclass(frozen=True)
 class Occurrence:
-    """An Event stored with its source: what the index keeps and the writer reads."""
+    """A resolved event stored with its source: what the index keeps, verifies against, and shows."""
     event: Event
+    resolved: ResolvedEvent
     text: str
     doc: str
     sid: str

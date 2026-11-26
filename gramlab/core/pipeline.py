@@ -70,13 +70,49 @@ class Pipeline:
     def ingest_text(self, text: str, doc: str = "") -> int:
         return self.ingest(self.read_text(text, doc))
 
-    def describe(self, e):
-        """Readable record: key tuple, family tuple and force."""
-        return {"actor": e.actor.text if e.actor else None, "action": e.action,
-                "patient": e.patient.text if e.patient else None, "voice": e.voice, "status": e.status,
-                "specific": self.keyer.decode(self.keyer.specific_key(e)),
-                "family": self.keyer.decode(self.keyer.family_key(e)),
-                "force": self.affect.force(e)}
+    def describe(self, e, sent=None, context=None):
+        """The resolved record as it would be stored (same resolution path as indexing), plus force."""
+        r = self.keyer.resolve_event(e, sent, context)
+        return {"actor": r.actor.__dict__, "action": r.action, "sense": r.sense, "alt_senses": list(r.alt_senses),
+                "patient": r.patient.__dict__, "voice": r.voice, "status": r.status, "force": self.affect.force(e)}
+
+    def ask(self, question: str, limit=10):
+        """A question in words, through the same front end and linker as the text: 'Who called John?',
+        'Who did Tom call?', 'Who was called by Tom?', 'What did Tom wash?'. The wh-word marks the requested role;
+        the other role is the given participant, verified against the stored binding. Returns index.ask()'s list,
+        or {"error": ...} when no event can be read from the question."""
+        if self.front_end is None:
+            raise RuntimeError("no front end: pass front_end=LiveFrontEnd.load(...) to read questions")
+        from .tagger import tokenize
+        words = tokenize(question.rstrip("?").strip() + " .")
+        WH = {"who", "whom", "what", "which"}
+        s = self.front_end.sentence(words, sid="q", doc="q")
+        # "Who did Tom call ?" → the linker sees an inverted clause; normalise the common shapes first
+        low = [w.lower() for w in words]
+        if len(low) > 3 and low[0] in WH and low[1] in ("did", "does", "do"):
+            # Who did X call → X did call Who   (the auxiliary keeps the verb a verb for the tagger)
+            words2 = words[2:-1]
+            # subject = everything up to the last token (the bare verb)
+            words2 = words2[:-1] + [words[1], words2[-1], words[0], "."]
+            s = self.front_end.sentence(words2, sid="q", doc="q")
+            low = [w.lower() for w in words2]
+        events = [e for e in self.linker.link(s) if e.actor or e.patient]
+        if not events:
+            return {"error": "no event read from the question", "tokens": words}
+        e = max(events, key=lambda x: (x.actor is not None) + (x.patient is not None))
+        def role(m):
+            if m is None:
+                return None
+            return "?" if m.text.lower() in WH else m.text
+        actor, patient = role(e.actor), role(e.patient)
+        if actor is None and patient != "?":
+            actor = "?"
+        if patient is None and actor != "?":
+            patient = "?"
+        if actor != "?" and patient != "?":
+            actor = "?"                                           # default: ask for the actor
+        return {"question": {"actor": actor, "action": e.action, "patient": patient, "voice": e.voice},
+                "answers": self.index.ask(e.action, actor=actor, patient=patient, limit=limit)}
 
     def answer(self, question: str, k=5):
         passages = self.index.search(question, k)

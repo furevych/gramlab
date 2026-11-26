@@ -21,12 +21,22 @@ question --index.search / index.related--> occurrences --writer--> answer
 | 1 · learned | sense picker | (lemma, pos, context) → synset | `sense.RankPicker` for verbs (shared hashed logistic model predicting the sense rank, SemCor-trained, 62.4% vs first sense 59.7%); first sense for nouns (picker 72.9% < 74.4%) | SemCor brown2 accuracy, verbs / nouns |
 | 1 · learned | coreference | pronoun mention → antecedent mention | `coref.RankedResolver` (mention-pair ranker on GUM train chains, 54.9%); rules: subject-first 47.2%, nearest nominal 14.3% | GUM test: pronoun event arguments in the gold chain |
 | 1 · learned | live front end (parser slot) | text → `Sentence` | `tagger.LiveFrontEnd`: perceptron tagger + lemma table on AMALGUM silver, predicates = tagged verbs, voice/status by surface rule, **no dependency parser** (link F1 0.851 vs 0.884 with gold parse) | GUM test re-tagged: tag/lemma accuracy, predicates found, link F1 |
-| 2 · index | `key.Keyer`, `index.MeaningIndex` | `(slot(actor), action, slot(patient), status)` → id; family postings `(class, sense_k, class)` and identity postings `(id, sense_k, id)` for the action's top-k senses (k=3 when posting, 10 when looking up); `add / lookup / related / search` | postings + occurrence records; `search` delegates to Level-1 `BM25Index` / `HybridRetriever` when attached | key exact vs gold, position-only control; occurrences per key |
+| 2 · index | `key.Keyer`, `index.MeaningIndex` | one `ResolvedEvent` per occurrence (bindings with state known/unresolved/omitted, chosen sense + alternatives); keys derived from it only: specific, family `(class, sense, class)`, strict identity `(id, sense, id)`, and permissive *proposals* (name tokens, bridged ids, one-sided) that must be verified; `add / lookup / related / ask / search` |
+| 2 · index (old row) | | `(slot(actor), action, slot(patient), status)` → id; family postings `(class, sense_k, class)` and identity postings `(id, sense_k, id)` for the action's top-k senses (k=3 when posting, 10 when looking up); `add / lookup / related / search` | postings + occurrence records; `search` delegates to Level-1 `BM25Index` / `HybridRetriever` when attached | key exact vs gold, position-only control; occurrences per key |
 | 3 · writer | `Pipeline.writer` | `(question, passages) → text` | Level 1's Qwen-0.5B + LoRA (`scripts/finetune_hf.py`), attached at chat time | faithfulness / token F1 (RESULTS run 8) |
 
 A **slot** is `(kind, class, id)`: kind ∈ general / specific / pronoun / missing; class = entity type for
 specific mentions, entity type or concept family for general ones; id = synset or registry id. Order is
 meaning. IDs are deterministic (`stable_id`), so two machines agree without a counter.
+
+## Questions
+
+`Pipeline.ask("Who called John?")` reads the question through the same front end and linker as the text, marks the
+wh-role as *requested*, uses the given participant's identity/proposal postings to find candidates, **verifies** each
+candidate's stored binding against the given participant, and returns the bound role with its source sentence —
+`unknown` when the stored role is unresolved or omitted (requested ≠ missing). `python -m gramlab.core.selftest`
+runs the milestone: *Tom called John. John called Tom. John was called.* → *Who called John?* = Tom + sentence;
+with only *John was called.* → unknown; plus did-questions, passives and a synonym verb (8 checks).
 
 ## End-to-end benchmark
 
