@@ -679,8 +679,8 @@ the auxiliary kept so the tagger sees a verb.
 
 Retrieval (run 14b setting, live paraphrase queries, 2,000): key recall@1 **0.904** (was 0.889), recall@10 0.987,
 source above decoy 95.8%; the source is in the candidate set for 95.8% of queries, now above the 93.6% roles-right
-because one-sided proposals recover cases where one role was read wrongly. Scoreboard rows unchanged (linker 0.884,
-key exact 0.830 / 0.708). Index on GUM test: 2,308 occurrences → 2,031 specific, 4,061 family, 5,576 identity and
+because one-sided proposals recover cases where one role was read wrongly. Constructed-role mode after the refactor:
+key 0.934 recall@1, decoy separation 100% (see Audit). Scoreboard rows unchanged (linker 0.884, key exact 0.830 / 0.708). Index on GUM test: 2,308 occurrences → 2,031 specific, 4,061 family, 5,576 identity and
 41,725 proposal postings.
 
 ### Run 13c — gazetteer: conclusion (Version 10, 2026-11-26)
@@ -733,3 +733,48 @@ for with recall at every stage (reader 7%, linker ~60% both roles, typer 77%), a
 average question. The honest position for the architecture is a **verifier and tie-breaker beside a lexical or
 dense retriever** — invoked when candidates agree on words and differ in roles, or when the question is explicitly
 about an agent or a patient — not a replacement for retrieval.
+
+## Audit — 2026-11-26: every result re-checked from a fresh clone
+
+Method: `git clone` of `cd2331c` into an empty directory; scoreboard, both retrieval modes, the self-test and the
+SQuAD benchmark re-run on the local GUM / AMALGUM / WordNet / SemCor / SQuAD copies with **only the models trained
+in that run** (linker, tagger, lemmatizer, typer, coreference, sense picker all retrained); each recorded number
+compared; the method of every run re-read for leakage or test-set tuning. Runs 0–8 (n-gram experiments, GPU
+training, Wikipedia retrieval, writer) could not be re-run here — they were checked for internal consistency only.
+
+**Reproduced (recorded → today):** linker 0.887 → 0.887, backfill 0.884 → 0.884, key exact 0.830/0.708 →
+0.830/0.708; senses 62.4/72.9 → 62.4/72.9; coreference 54.9 → 54.9; live link F1 0.851/0.854 → 0.854; live keys on
+gold-known events 0.148 → 0.195 (recorded) vs 0.154 → 0.202 (today); WordNet coverage 0.992/0.982 identical;
+retrieval, live paraphrase queries: key 0.904 → 0.902, decoy separation 95.8 → 95.8, roles right 93.6 → 93.8;
+self-test 8/8 → 8/8; SQuAD: event path on attempted 0.461 vs BM25 0.710 → 0.458 vs 0.702; who-questions 0.547 vs
+0.679 → 0.532 vs 0.684; BM25-proposes/key-verifies 0.532 vs 0.704 → 0.548 vs 0.718.
+
+**Corrections.**
+- *Run 14b, constructed-role retrieval:* 0.957 recall@1 was measured before the run-15 refactor and never re-recorded.
+  After it: **0.934** recall@1, recall@10 0.997, decoy separation 100%, hybrid 0.925. The live-query numbers in run 15
+  were measured after the refactor and stand.
+- *Entity typer:* its dev-chosen regularization is unstable across runs — 74.5/73.7 (run 12), 71.7/78.0 (Kaggle),
+  72.7/76.3 (today). Treat the typer as **73 ± 2 general / 76 ± 2 specific**. This is why every gazetteer comparison
+  at ±1 point was correctly read as null, and why the live-key ceiling (typer²) is ≈ 0.53–0.58, not a point value.
+
+**Where choices touched the test set (flagged, not fatal).**
+- Backfill thresholds (0.6 / 0.1, run 9) were the first values tried, judged on GUM test; the gain (+5/+12 key
+  points, link F1 unchanged) is large relative to any plausible tuning effect, and the same values hold today.
+- Query-side sense width (3 / 10 / all, run 14b) was compared on the same 2,000 test queries; the chosen setting (all)
+  is a lookup-side widening with a mechanical explanation, but the comparison itself was on test.
+- The hybrid bonus (+3) was never tuned at all.
+- Retrieval queries in runs 10/14 are derived from the indexed corpus (stated in both runs); run 16 is the independent
+  test and is negative.
+- `key_exact_known` (run 12b) was introduced after seeing results; both metrics are reported and the reason (GUM leaves
+  relative pronouns unannotated) is an annotation fact, not a convenience.
+
+**Clean by construction:** linker threshold, typer alpha, coreference alpha, sense-picker alpha and the run-6 hybrid
+weight were chosen on dev; GUM test was never trained on; AMALGUM, SemCor and SQuAD are separate documents from GUM.
+Known caveats stand as written: WordNet's first sense is a SemCor-derived baseline; run 1's single seed was replaced by
+3 seeds in run 2; run 5's +1.8 on body queries was labelled "about the noise level".
+
+**Verdict of the audit.** Every number that can be re-run here re-runs within ±1 point except the two corrected
+above; no claim rests on a leak; the negative results (grammar heads, hypernym families, gazetteer typing, SQuAD) are
+as solid as the positive ones (role linker, ordered key on paraphrase/reversal, verified answers). The honest
+one-line summary is unchanged: the ordered event index is exact and cheap where the distinction is who-did-what-to-
+whom, and loses to a bag of words on general questions.
