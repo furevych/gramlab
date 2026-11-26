@@ -840,3 +840,50 @@ re-run with the soft map yet; the slot set has no time/place/quantity slots, so 
 **Next:** (a) Kaggle CPU notebook: same model with teacher regression + question→passage pairs (map v2 recipe) and the
 BM25 + soft map + key-verify three-way; (b) time/place/quantity slots and the SQuAD re-run; (c) typer on Wikipedia
 anchors (the specific-entity half of layer 0).
+
+## Run 18 — the soft map beside the key, and on the external test (2026-11-26, local CPU)
+
+Two questions left open by run 17: does the soft map add anything *on top of* the key, and does it transfer to
+independently written questions?
+
+**(a) Three-way on the run-17 bench** (`softmap.run(..., key_bonus=1.0)`: BM25/max + cosine + 1.0·[sentence in the
+query's family ∪ identity postings], the key index ingested over all 192k sentences, decoys indexed under swapped roles;
+698 live held-out queries):
+
+| system | recall@1 | recall@10 | source above decoy |
+|---|---|---|---|
+| BM25 | 0.688 | 0.920 | 0.000 |
+| BM25 + key (bonus 1.0 on the normalised scale) | 0.891 | 0.981 | 0.934 (6.6% tied) |
+| BM25 + soft map | 0.842 | 0.966 | 0.957 |
+| BM25 + soft map + key | **0.895** | 0.970 | **0.961** |
+
+The key does the heavy lifting; the soft map adds +0.4 recall@1 and turns the key's 6.6% decoy ties into separations
+(the 46 queries whose event the key could not post get a candidate from the map). Where both fire they agree.
+
+**(b) SQuAD v1.1 dev** (`softmap_external.py`: same corpus and scoring as run 16, 2,067 paragraphs → 10,372 sentences,
+10,570 questions; roles on both sides from the learned linker on live text, 8,034 questions with a parsed event; the
+map always answers):
+
+| top-1 sentence has the answer | all (10,570) | who-questions (1,096) |
+|---|---|---|
+| BM25 | **0.615** | 0.606 |
+| soft map alone | 0.137 | 0.142 |
+| BM25 + soft map, weight 1.0 (the run-17 setting) | 0.580 | 0.580 |
+| BM25 + soft map, weight 0.5 (sensitivity only) | 0.612 | 0.607 |
+
+**Reading.** On the external test the soft map is neutral at best and harmful at the pre-set weight. The map was
+trained on AMALGUM self-paraphrases and initialised from WordNet, so what it knows is lexical synonymy under role
+order; SQuAD questions differ from their answer sentences in ways that are not synonym substitution (ellipsis,
+definitional rephrasing, numbers, dates), and the role slots give no purchase on where/when/how-many. The run-17
+gains are real but in-corpus: paraphrase queries derived from the collection by the same kind of substitution the
+map encodes.
+
+What stands from runs 17–18:
+- Layer 0 as a distribution (+17 over first sense, no training) is a design fact and applies equally to the key's
+  lookup, which already posts several senses (runs 9d, 14b) — that is where the gain was already being collected.
+- Role slots give the key's decoy separation without the key's brittleness; as a *fallback for empty candidate sets*
+  the soft map is worth its 7.5M numbers, as a retriever it is not.
+- The only lever left on CPU is an external training signal (teacher embeddings / question→passage pairs); map v2
+  showed that signal lifts the slot map to "about the noise level" over BM25 on Wikipedia queries. The honest prior
+  for a teacher-trained soft map on SQuAD is therefore a small, possibly null, gain — worth one Kaggle CPU run to
+  close the question, not more.

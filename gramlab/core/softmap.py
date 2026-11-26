@@ -375,7 +375,10 @@ def _hyponyms(wn, pos, off):
 
 # ------------------------------------------------------------------------------------------------ benchmark
 def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results", n_queries=2000, seed=0, dim=64, epochs=4,
-        train_pairs=120000, holdout_mod=5, variants=("roles/synsets", "roles/words", "bow/synsets", "roles/synsets/untrained"), wordnet_path=None):
+        train_pairs=120000, holdout_mod=5, variants=("roles/synsets", "roles/words", "bow/synsets", "roles/synsets/untrained"), wordnet_path=None,
+        key_bonus=0.0):
+    """key_bonus > 0 adds the core-v1 key index as a third signal: BM25/max + cosine + key_bonus·[sentence in the query's
+    family ∪ identity postings] (the run-14 lookup, decoys indexed under their swapped roles)."""
     t0 = time.time()
     rng = random.Random(seed)
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -451,6 +454,39 @@ def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results",
     log(f"collection {len(texts)} incl. {len(decoy_of)} decoys; BM25 vocab {len(bm.vocab)}")
     bm_scores = [bm.scores(q) for q in q_texts]
 
+    key_sets = None
+    if key_bonus > 0:
+        from .pipeline import Pipeline
+        from .records import Occurrence
+        from .registry import SpecificIndex
+        t = time.time()
+        pipe = Pipeline(linker=gold, general=general, specific=SpecificIndex())
+        pipe.ingest(sents)
+        sid_to_text = {s.sid: i for i, s in enumerate(sents)}
+        for si, e, syn in queries:
+            s = sents[si]
+            swapped = Event(e.verb, e.action, e.patient, e.actor, e.voice, e.status)
+            rs = pipe.keyer.resolve_event(swapped, s)
+            keys = pipe.keyer.keys_from(rs)
+            d_id = decoy_of[si]
+            pipe.index.records.append(Occurrence(swapped, rs, texts[d_id], s.doc, s.sid + "#decoy", keys["specific"][0], keys["family"][0]))
+            sid_to_text[s.sid + "#decoy"] = d_id
+            for level in ("specific", "family", "identity", "proposal"):
+                for k in keys[level]:
+                    pipe.index.postings[(level, k, rs.status)].append(d_id)
+        key_sets = []
+        for qi, (si, e, syn) in enumerate(queries):
+            q_event = q_events[qi][0] if q_events[qi] else Event(0, syn, None, None, "passive", "asserted")
+            qkeys = pipe.keyer.keys_from(pipe.keyer.resolve_event(q_event), query=True)
+            cset = set()
+            for level, ks in (("family", qkeys["family"]), ("identity", qkeys["identity"]), ("proposal", qkeys["proposal"])):
+                for k in ks:
+                    for st in ("asserted", "negated", "possible"):
+                        for i in pipe.index.postings.get((level, k, st), ()):
+                            cset.add(sid_to_text[pipe.index.records[i].sid])
+            key_sets.append(np.fromiter(cset, dtype=np.int64) if cset else np.zeros(0, dtype=np.int64))
+        log(f"key index built in {time.time() - t:.0f}s; empty candidate sets {sum(len(c) == 0 for c in key_sets)}/{len(queries)}")
+
     # training pairs from non-held-out sentences
     train_ids = [i for i, s in enumerate(sents) if s.doc not in held and len(s.forms) >= 5]
     rng.shuffle(train_ids)
@@ -483,6 +519,11 @@ def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results",
         tally("bm25", qi, bm_scores[qi])
     close("bm25")
     bm_max = [max(float(sc.max()), 1e-6) for sc in bm_scores]
+    if key_sets is not None:
+        for qi in range(n):
+            sc = bm_scores[qi] / bm_max[qi]; sc[key_sets[qi]] += key_bonus
+            tally("hybrid bm25+key", qi, sc)
+        close("hybrid bm25+key")
 
     for variant in variants:
         parts = variant.split("/")
@@ -528,10 +569,15 @@ def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results",
                 qi = s0 + j
                 tally(f"map {variant}", qi, sims[j])
                 tally(f"hybrid bm25+map {variant}", qi, bm_scores[qi] / bm_max[qi] + sims[j])
+                if key_sets is not None:
+                    sc3 = bm_scores[qi] / bm_max[qi] + sims[j]; sc3[key_sets[qi]] += key_bonus
+                    tally(f"three-way bm25+map+key {variant}", qi, sc3)
                 if qi < 5:
                     si, top = queries[qi][0], int(np.argmax(sims[j]))
                     ex.append({"query": q_texts[qi][:120], "source": texts[si][:120], "map_top1": texts[top][:120], "hit": top == si})
         close(f"map {variant}"); close(f"hybrid bm25+map {variant}")
+        if key_sets is not None:
+            close(f"three-way bm25+map+key {variant}")
         board.setdefault("examples", {})[variant] = ex
         if variant == variants[0]:
             model.save(str(Path(out_dir) / "softmap.npz"))
@@ -554,9 +600,10 @@ def main(argv=None):
     ap.add_argument("--train_pairs", type=int, default=120000)
     ap.add_argument("--variants", default="roles/synsets,roles/words,bow/synsets,roles/synsets/untrained")
     ap.add_argument("--wordnet", default=None)
+    ap.add_argument("--key_bonus", type=float, default=0.0, help="add the core-v1 key index as a third signal (bonus on BM25/max scale)")
     a = ap.parse_args(argv)
     run(a.amalgum, a.semcor, a.frontend, a.linker, a.out, a.n, dim=a.dim, epochs=a.epochs, train_pairs=a.train_pairs,
-        variants=tuple(a.variants.split(",")), wordnet_path=a.wordnet)
+        variants=tuple(a.variants.split(",")), wordnet_path=a.wordnet, key_bonus=a.key_bonus)
 
 
 if __name__ == "__main__":
