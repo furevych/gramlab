@@ -121,8 +121,86 @@ def main(argv=None):
     ap.add_argument("--out", default="results")
     ap.add_argument("--wordnet", default=None)
     ap.add_argument("--limit_paragraphs", type=int, default=None)
+    ap.add_argument("--train", default=None, help="SQuAD train json: train the map on question→sentence pairs first, save to --map")
+    ap.add_argument("--init_map", default=None)
+    ap.add_argument("--epochs", type=int, default=3)
+    ap.add_argument("--limit_articles", type=int, default=None)
+    ap.add_argument("--dim", type=int, default=64)
     a = ap.parse_args(argv)
+    if a.train:
+        train_squad(a.train, a.frontend, a.linker, a.map, a.semcor, a.wordnet, dim=a.dim, epochs=a.epochs, init_map=a.init_map, limit_articles=a.limit_articles)
     run(a.squad, a.frontend, a.linker, a.map, a.semcor, a.out, a.wordnet, a.limit_paragraphs)
+
+
+
+# ------------------------------------------------------------------------------------------------ external training signal
+def train_squad(train_path, frontend, linker, out_path, semcor_dir=None, wordnet_path=None, dim=64, epochs=3, batch=256, seed=0,
+                init_map=None, limit_articles=None):
+    """Train the soft map on real question → answer-sentence pairs (SQuAD *train*; dev stays the test). Contrastive,
+    in-batch negatives; batches are drawn article by article so the negatives include same-paragraph sentences.
+    Codes start from the WordNet-hierarchy initialisation (or from `init_map`, e.g. the AMALGUM-trained map)."""
+    import random
+    from .softmap import train as _train
+    t0 = time.time()
+    wn = WordNet(wordnet_path)
+    ix = SoftIndexer(wn)
+    if semcor_dir:
+        ix.sense_prior_from_semcor(semcor_dir)
+    general = GeneralIndex(wordnet_path=wordnet_path)
+    fe = LiveFrontEnd.load(frontend)
+    lk = BackfillLinker(LearnedLinker.load(linker))
+    pipe = Pipeline(linker=lk, general=general, front_end=fe)
+    data = json.loads(Path(train_path).read_text(encoding="utf-8"))["data"]
+    if limit_articles:
+        data = data[:limit_articles]
+    pairs = []                     # (article index, question Sentence, answer Sentence)
+    for ai, art in enumerate(data):
+        for par in art["paragraphs"]:
+            ss = pipe.read_text(par["context"], "t")
+            texts = [s.text() for s in ss]
+            for q in par["qas"]:
+                ans = q["answers"][0]["text"]
+                tgt = next((s for s, t in zip(ss, texts) if contains(t, [ans])), None)
+                if tgt is None:
+                    continue
+                qs = fe.sentence(fe_tokens(q["question"]), sid="q", doc="q")
+                pairs.append((ai, qs, tgt))
+        if ai % 50 == 0:
+            log(f"  read {ai + 1}/{len(data)} articles, {len(pairs)} pairs ({time.time() - t0:.0f}s)")
+    log(f"{len(pairs)} question→sentence pairs from {len(data)} articles ({time.time() - t0:.0f}s)")
+    rng = random.Random(seed)
+    arts = sorted({a for a, _, _ in pairs}); rng.shuffle(arts)
+    order = {a: i for i, a in enumerate(arts)}
+    pairs.sort(key=lambda x: (order[x[0]], rng.random()))
+    qc, pc = Corpus(), Corpus()
+    for _, qs, ts in pairs:
+        qc.add(featurize(qs, slot_labels(qs, lk.link(qs), True), ix), 0)
+        pc.add(featurize(ts, slot_labels(ts, lk.link(ts), True), ix), 0)
+    qc.finish(); pc.finish()
+    model = SoftMap.load(init_map) if init_map else SoftMap(ix.init_codes(dim=dim, seed=seed), n_slots=4)
+
+    # article-blocked batches: permute whole blocks each epoch, keep within-block order
+    n = len(pairs)
+    blocks = [list(range(s, min(n, s + batch))) for s in range(0, n, batch)]
+    import numpy as _np
+    prng = _np.random.default_rng(seed)
+    for ep in range(epochs):
+        prng.shuffle(blocks)
+        perm = _np.concatenate([_np.asarray(b) for b in blocks])
+        qsub, psub = _reorder(qc, perm), _reorder(pc, perm)
+        _train(model, qsub, psub, epochs=1, batch=batch, seed=seed + ep, shuffle=False, log=lambda m: log(m.replace("epoch 1", f"epoch {ep + 1}")))
+    model.save(out_path)
+    log(f"saved {out_path} ({time.time() - t0:.0f}s)")
+    return model
+
+
+def _reorder(c, perm):
+    """A Corpus with texts in `perm` order."""
+    out = Corpus()
+    for i in perm:
+        a, b = c.off[i], c.off[i + 1]
+        out.add((c.rows[a:b], c.ws[a:b], c.sl[a:b]), 0)
+    return out.finish()
 
 
 if __name__ == "__main__":

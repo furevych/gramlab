@@ -887,3 +887,39 @@ What stands from runs 17–18:
   showed that signal lifts the slot map to "about the noise level" over BM25 on Wikipedia queries. The honest prior
   for a teacher-trained soft map on SQuAD is therefore a small, possibly null, gain — worth one Kaggle CPU run to
   close the question, not more.
+
+## Run 19 — the external signal: soft map trained on real question → sentence pairs (SQuAD train), tested on dev (2026-11-26, local CPU)
+
+The last lever named in run 18. `softmap_external.train_squad`: 83,255 question → answer-sentence pairs from the 442
+SQuAD *train* articles (the sentence of the paragraph that contains the first gold answer; both sides through the live
+front end + learned linker into role slots), contrastive with in-batch negatives drawn article by article (so negatives
+include same-paragraph sentences), codes from the WordNet-hierarchy initialisation. Dev untouched. Featurising takes
+14 min, training 10 s per epoch.
+
+| dev, top-1 sentence has the answer | all (10,570) | who (1,096) | train in-batch top-1 |
+|---|---|---|---|
+| BM25 | **0.615** | 0.606 | — |
+| soft map, AMALGUM self-paraphrases (run 18) | 0.137 | 0.142 | — |
+| soft map, SQuAD-train, d=64, 4 epochs | 0.183 | 0.179 | 0.52 |
+| soft map, SQuAD-train, d=128, 20 epochs | 0.187 | 0.187 | 0.77 |
+| hybrid BM25 + map (d=64), weight 0.5 | 0.617 | 0.607 | |
+| hybrid BM25 + map (d=128), weight 0.5 | 0.615 | 0.607 | |
+| hybrid, weight 1.0 (either) | 0.58–0.59 | 0.58 | |
+
+**Reading.** Real question→sentence supervision lifts the map alone from 0.14 to 0.19 and no further: the d=128 model
+fits its training batches (0.77) while dev stays at 0.19 — the capacity goes into memorising, not into anything that
+transfers. In the hybrid the map is at best invisible (+0.2) and at the pre-set weight harmful. The smoke run on 20
+articles (hybrid 0.609 vs BM25 0.601) was noise.
+
+**Conclusion of the soft-map line (runs 17–19).** A sentence as four weighted bags of sense codes (7.5–15M numbers)
+does three things well and one thing not at all: it separates role reversals (96%), it encodes WordNet synonymy at
+zero training cost (+17 over first sense), and it gives the key index a fallback when its candidate set is empty
+(+0.4). It does not retrieve answers to independently written questions — not from AMALGUM self-paraphrases, not from
+83k real pairs. That is the same verdict as run 16 for the key, reached by the soft route: structure buys exactness on
+who-did-what-to-whom and nothing on general questions. The gap to BM25 (0.19 vs 0.62) is not a tuning gap.
+
+What remains defensible as the project's result: core-v1's components (linker 0.887, verified ordered key, live front
+end) plus the layer-0 distribution finding, used as a **verifier and reversal-detector beside a lexical retriever** —
+BM25 + key reaches 0.891 on paraphrase/reversal queries where BM25 alone has 0.688 and cannot separate reversals at all.
+Everything that tried to make the structural representation *the* retriever (map v1, hypernym families, the key alone,
+the soft map) has now been tested and lost to a bag of words on general questions.

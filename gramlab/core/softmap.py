@@ -260,7 +260,7 @@ class SoftMap:
         return cls(d["R"], d["g"].shape[0], d["g"])
 
 
-def train(model: SoftMap, qc: Corpus, pc: Corpus, epochs=4, batch=256, lr=3e-3, tau=0.05, seed=0, log=log):
+def train(model: SoftMap, qc: Corpus, pc: Corpus, epochs=4, batch=256, lr=3e-3, tau=0.05, seed=0, log=log, shuffle=True):
     """InfoNCE with in-batch negatives (query -> its source), Adam on the code table and gates."""
     rng = np.random.default_rng(seed)
     n = len(qc)
@@ -268,7 +268,7 @@ def train(model: SoftMap, qc: Corpus, pc: Corpus, epochs=4, batch=256, lr=3e-3, 
     mg, vg = np.zeros_like(model.g), np.zeros_like(model.g)
     b1, b2, eps, t = 0.9, 0.999, 1e-8, 0
     for ep in range(epochs):
-        perm = rng.permutation(n)
+        perm = rng.permutation(n) if shuffle else np.arange(n)
         tot, cnt, acc = 0.0, 0, 0
         for s in range(0, n, batch):
             ids = perm[s:s + batch]
