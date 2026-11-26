@@ -30,7 +30,8 @@ LEX_TO_TYPE = {
     "noun.shape": "abstract", "noun.motive": "abstract", "noun.Tops": "abstract",
 }
 # lead-sentence pattern: "<title> (is|was|were|are) (a|an|the|one of the) [modifiers] <head noun> ..."
-_LEAD = re.compile(r"^(?P<title>.{1,80}?)\s+(?:is|was|were|are)\s+(?:a|an|the|one of the|the name of a|a type of|a kind of)\s+(?P<np>[^.,;:(]{1,80})")
+_LEAD = re.compile(r"^(?P<title>.{1,160}?)\s+(?:is|was|were|are)\s+(?:a|an|the|one of the|the name of a|a type of|a kind of)\s+(?P<np>[^.,;:(]{1,80})")
+_PAREN = re.compile(r"\s*\([^()]*\)")      # "Russia (Russian: Россия, romanized: Rossiya), or the Russian Federation, is a country"
 _WORD = re.compile(r"[A-Za-z][A-Za-z\-]*")
 NAME_HEADS = {"name", "surname", "forename", "given", "nickname", "patronymic"}   # "Jamie is a unisex given name" → person
 _norm = re.compile(r"[^a-z0-9 ]+")
@@ -91,7 +92,9 @@ def build(passages_path, out_path, wn, limit=None, log_every=500000):
                 continue
             bare = re.sub(r"\s*\([^)]*\)\s*$", "", title)
             plain = 1 if bare == title else 0                 # "Russia" vs "Russia (song)": plain titles win at load time
-            m = _LEAD.match(text[:400])
+            lead = _PAREN.sub("", text[:600])
+            lead = _PAREN.sub("", lead)                        # nested once more
+            m = _LEAD.match(lead)
             if not m:
                 continue
             head = head_noun(m.group("np"), wn)
