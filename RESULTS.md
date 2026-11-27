@@ -923,3 +923,57 @@ end) plus the layer-0 distribution finding, used as a **verifier and reversal-de
 BM25 + key reaches 0.891 on paraphrase/reversal queries where BM25 alone has 0.688 and cannot separate reversals at all.
 Everything that tried to make the structural representation *the* retriever (map v1, hypernym families, the key alone,
 the soft map) has now been tested and lost to a bag of words on general questions.
+
+## Run 20 — a pretrained dense finder (MiniLM) with the key as verifier (2026-11-27, Kaggle CPU, gramlab-dense V1)
+
+Finder: `sentence-transformers/all-MiniLM-L6-v2` (22M parameters; 192k sentences encoded in 26 min on the Kaggle CPU).
+Verifier: the core-v1 key index, +bonus for sentences in the question's family ∪ identity postings. Everything else as
+runs 17–18 (`kaggle_dense.ipynb`; linker and front end retrained in the run: 637/698 live query roles right).
+
+**(a) Held-out paraphrase / reversal bench** (698 live queries, 192,244 sentences incl. one role-swapped decoy each):
+
+| system | recall@1 | recall@10 | source above decoy |
+|---|---|---|---|
+| BM25 | 0.688 | 0.920 | 0.000 (tied) |
+| **MiniLM alone** | **0.291** | 0.852 | **0.440** (decoy above source 56%) |
+| BM25 + MiniLM | 0.322 | 0.948 | 0.440 |
+| BM25 + key | 0.891 | 0.980 | 0.936 (6.5% tied) |
+| MiniLM + key | 0.852 | 0.966 | 0.964 |
+| BM25 + MiniLM + key | **0.894** | **0.990** | **0.964** |
+| soft map (untrained) · BM25 + soft map · + key | 0.572 · 0.844 · 0.898 | — | 0.959 · 0.954 · 0.961 |
+
+The dense encoder is *order-blind*: between a sentence and its role-reversed twin it prefers the twin 56% of the time, and
+that is most of its recall@1 loss (0.85 → 0.29). Adding it to BM25 drags BM25 down (0.69 → 0.32) because the decoy is now
+scored above the source by the dense half. The key repairs this completely: MiniLM + key 0.85, three-way 0.89 with 96%
+reversal separation and recall@10 0.99 — the best numbers on this bench so far.
+
+**(b) SQuAD v1.1 dev** (10,570 questions; 2,240 get at least one key candidate):
+
+| top-1 sentence has the answer | all | who (1,096) |
+|---|---|---|
+| BM25 | 0.615 | 0.606 |
+| MiniLM | 0.589 | 0.506 |
+| **BM25 + MiniLM** | **0.672** | **0.648** |
+| BM25 + key, bonus 1.0 / 0.5 | 0.544 / 0.600 | 0.505 / 0.587 |
+| MiniLM + key, bonus 1.0 / 0.5 | 0.530 / 0.549 | 0.441 / 0.460 |
+| BM25 + MiniLM + key, bonus 1.0 / 0.5 | 0.636 / 0.669 | 0.581 / 0.641 |
+
+On real questions the key *hurts* at bonus 1.0 (−3.6 on the three-way, −6.7 on who-questions) and is neutral-to-negative
+at 0.5. The reason is the one run 16 measured: on unrestricted text the key's extraction is wrong about as often as it is
+right (event path 0.46 on attempted), so as a bonus it promotes wrong sentences as often as right ones. A verifier needs
+precision the extraction chain does not have on open text. The standard BM25 + dense hybrid, with nothing of ours in it,
+is the best SQuAD system in the project (+5.7 over BM25).
+
+**What this settles.**
+1. The ordered key is a **reversal detector**, and a very good one: it is the only component in this project — and the
+   only one of BM25, MiniLM, soft map, key — that tells *X called Y* from *Y called X*, and it fixes a modern dense
+   encoder's blindness to that completely (0.29 → 0.85, 44% → 96%).
+2. It is **not a general verifier**: on questions that are not about role order, its false positives cost more than its
+   true positives gain. Used as a re-ranking bonus on open QA it should be off, or restricted to the case it is for —
+   candidates that share the question's participants but in a different order.
+3. The retrieval gains on general questions come from the standard hybrid (BM25 + dense), not from grammar.
+
+That is the project's final shape: a compact, CPU-only, inspectable **who-did-what-to-whom verifier** (linker 0.887,
+ordered key, live front end, layer-0 sense distributions) that makes any retriever order-aware, measured against BM25
+and a pretrained dense encoder on a held-out reversal bench and an external QA set — and a documented negative on every
+attempt to make the structural representation the retriever itself.
