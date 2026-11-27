@@ -30,7 +30,9 @@ from .wordnet import WordNet
 
 
 def run(squad_path, frontend, linker, map_path, semcor_dir=None, out_dir="results", wordnet_path=None, limit_paragraphs=None,
-        weights=(1.0, 0.5)):
+        weights=(1.0, 0.5), dense=None, key_bonus=0.0):
+    """dense: sentence-transformers model as a finder; key_bonus > 0: core-v1 key verification (run-16 ask path) added to
+    the dense and BM25 rankings: +bonus for sentences whose stored key matches the question's resolved event."""
     t0 = time.time()
     wn = WordNet(wordnet_path)
     ix = SoftIndexer(wn)
@@ -75,6 +77,34 @@ def run(squad_path, frontend, linker, map_path, semcor_dir=None, out_dir="result
     Q = model.encode(qcorp)
     log(f"encoded; questions with a parsed event {n_event}/{len(questions)} ({time.time() - t0:.0f}s)")
 
+    Pd = Qd = None
+    if dense:
+        from .softmap import DenseEncoder
+        t = time.time()
+        enc = DenseEncoder(dense)
+        Pd = enc.encode(sent_texts); Qd = enc.encode([q for q, _ in questions])
+        log(f"dense encoder {dense}: {len(sent_texts) + len(questions)} texts in {time.time() - t:.0f}s")
+    key_sets = None
+    if key_bonus > 0:
+        t = time.time()
+        for s in sents:
+            pipe.ingest([s])
+        sid_row = {s.sid: i for i, s in enumerate(sents)}
+        key_sets = []
+        for qtext, _ in questions:
+            rows = set()
+            try:
+                r = pipe.ask(qtext, limit=50)
+                hits = r.get("answers", []) if isinstance(r, dict) else []
+            except Exception:
+                hits = []
+            for h in hits:
+                sid = h.get("sid") if isinstance(h, dict) else None
+                if sid in sid_row:
+                    rows.add(sid_row[sid])
+            key_sets.append(np.fromiter(rows, dtype=np.int64) if rows else np.zeros(0, dtype=np.int64))
+        log(f"key index over {len(sents)} sentences; questions with ≥1 key candidate {sum(len(k) > 0 for k in key_sets)}/{len(questions)} ({time.time() - t:.0f}s)")
+
     bm = BM25(sent_texts)
     res = Counter()
     who = Counter()
@@ -87,6 +117,16 @@ def run(squad_path, frontend, linker, map_path, semcor_dir=None, out_dir="result
         tops = {"bm25": int(np.argmax(sc)), "map": int(np.argmax(sim))}
         for w in weights:
             tops[f"hybrid_w{w}"] = int(np.argmax(sc / mx + w * sim))
+        if Pd is not None:
+            d = Pd @ Qd[qi]
+            tops["dense"] = int(np.argmax(d))
+            tops["bm25+dense"] = int(np.argmax(sc / mx + d))
+        if key_sets is not None:
+            kb = np.zeros(len(sent_texts), dtype=np.float32); kb[key_sets[qi]] = key_bonus
+            tops["bm25+key"] = int(np.argmax(sc / mx + kb))
+            if Pd is not None:
+                tops["dense+key"] = int(np.argmax(d + kb))
+                tops["bm25+dense+key"] = int(np.argmax(sc / mx + d + kb))
         for name, top in tops.items():
             ok = contains(sent_texts[top], answers)
             res[name] += ok
@@ -126,10 +166,12 @@ def main(argv=None):
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--limit_articles", type=int, default=None)
     ap.add_argument("--dim", type=int, default=64)
+    ap.add_argument("--dense", default=None)
+    ap.add_argument("--key_bonus", type=float, default=0.0)
     a = ap.parse_args(argv)
     if a.train:
         train_squad(a.train, a.frontend, a.linker, a.map, a.semcor, a.wordnet, dim=a.dim, epochs=a.epochs, init_map=a.init_map, limit_articles=a.limit_articles)
-    run(a.squad, a.frontend, a.linker, a.map, a.semcor, a.out, a.wordnet, a.limit_paragraphs)
+    run(a.squad, a.frontend, a.linker, a.map, a.semcor, a.out, a.wordnet, a.limit_paragraphs, dense=a.dense, key_bonus=a.key_bonus)
 
 
 

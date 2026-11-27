@@ -308,6 +308,28 @@ def train(model: SoftMap, qc: Corpus, pc: Corpus, epochs=4, batch=256, lr=3e-3, 
     return model
 
 
+# ------------------------------------------------------------------------------------------------ dense finder
+class DenseEncoder:
+    """A pretrained sentence encoder as the finder. `name` = sentence-transformers model; "hash" = a stand-in (hashed
+    unigram vectors) for testing the plumbing where the package is absent."""
+
+    def __init__(self, name, batch=256):
+        self.name, self.batch = name, batch
+        self.model = None
+        if name != "hash":
+            from sentence_transformers import SentenceTransformer
+            self.model = SentenceTransformer(name, device="cpu")
+
+    def encode(self, texts):
+        if self.model is not None:
+            return np.asarray(self.model.encode(list(texts), batch_size=self.batch, normalize_embeddings=True, show_progress_bar=False), dtype=np.float32)
+        out = np.zeros((len(texts), 256), dtype=np.float32)
+        for i, t in enumerate(texts):
+            for w in t.lower().split():
+                out[i, zlib.crc32(w.encode()) % 256] += 1.0
+        return out / (np.linalg.norm(out, axis=1, keepdims=True) + 1e-6)
+
+
 # ------------------------------------------------------------------------------------------------ paraphrases
 def paraphrase(s, events, indexer: SoftIndexer, rng, p_sub=0.5, p_drop=0.15):
     """Self-paraphrase for training: substitute content words with a synonym from a *random* sense (so the map must
@@ -376,8 +398,10 @@ def _hyponyms(wn, pos, off):
 # ------------------------------------------------------------------------------------------------ benchmark
 def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results", n_queries=2000, seed=0, dim=64, epochs=4,
         train_pairs=120000, holdout_mod=5, variants=("roles/synsets", "roles/words", "bow/synsets", "roles/synsets/untrained"), wordnet_path=None,
-        key_bonus=0.0):
-    """key_bonus > 0 adds the core-v1 key index as a third signal: BM25/max + cosine + key_bonus·[sentence in the query's
+        key_bonus=0.0, dense=None):
+    """dense = a sentence-transformers model name/path (e.g. all-MiniLM-L6-v2): adds a pretrained dense retriever as a
+    finder, alone, with BM25, and with the key (needs the package; on Kaggle it is installed).
+    key_bonus > 0 adds the core-v1 key index as a third signal: BM25/max + cosine + key_bonus·[sentence in the query's
     family ∪ identity postings] (the run-14 lookup, decoys indexed under their swapped roles)."""
     t0 = time.time()
     rng = random.Random(seed)
@@ -525,6 +549,28 @@ def run(amalgum_glob, semcor_dir, frontend_path, linker_path, out_dir="results",
             tally("hybrid bm25+key", qi, sc)
         close("hybrid bm25+key")
 
+    if dense:
+        t = time.time()
+        enc = DenseEncoder(dense)
+        Pd = enc.encode(texts)
+        Qd = enc.encode(q_texts)
+        log(f"dense encoder {dense}: {len(texts)} texts in {time.time() - t:.0f}s")
+        for s0 in range(0, n, 100):
+            sims = Qd[s0:s0 + 100] @ Pd.T
+            for j in range(sims.shape[0]):
+                qi = s0 + j
+                tally(f"dense {dense}", qi, sims[j])
+                tally(f"hybrid bm25+dense", qi, bm_scores[qi] / bm_max[qi] + sims[j])
+                if key_sets is not None:
+                    sc3 = sims[j].copy(); sc3[key_sets[qi]] += key_bonus
+                    tally("hybrid dense+key", qi, sc3)
+                    sc4 = bm_scores[qi] / bm_max[qi] + sims[j]; sc4[key_sets[qi]] += key_bonus
+                    tally("three-way bm25+dense+key", qi, sc4)
+        close(f"dense {dense}"); close("hybrid bm25+dense")
+        if key_sets is not None:
+            close("hybrid dense+key"); close("three-way bm25+dense+key")
+        board["dense_model"] = dense
+
     for variant in variants:
         parts = variant.split("/")
         use_slots, use_syn, trained = parts[0] == "roles", parts[1] == "synsets", "untrained" not in parts
@@ -601,9 +647,10 @@ def main(argv=None):
     ap.add_argument("--variants", default="roles/synsets,roles/words,bow/synsets,roles/synsets/untrained")
     ap.add_argument("--wordnet", default=None)
     ap.add_argument("--key_bonus", type=float, default=0.0, help="add the core-v1 key index as a third signal (bonus on BM25/max scale)")
+    ap.add_argument("--dense", default=None, help="sentence-transformers model as a dense finder (or 'hash' stand-in)")
     a = ap.parse_args(argv)
     run(a.amalgum, a.semcor, a.frontend, a.linker, a.out, a.n, dim=a.dim, epochs=a.epochs, train_pairs=a.train_pairs,
-        variants=tuple(a.variants.split(",")), wordnet_path=a.wordnet, key_bonus=a.key_bonus)
+        variants=tuple(v for v in a.variants.split(",") if v), wordnet_path=a.wordnet, key_bonus=a.key_bonus, dense=a.dense)
 
 
 if __name__ == "__main__":
