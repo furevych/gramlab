@@ -1057,3 +1057,45 @@ record and milliseconds per question against the key's few bytes and microsecond
   (binding a time or place slot in later without re-indexing), and reversal detection with no lookup at all. None of
   that has been shown to answer a question the key cannot; that experiment — two-step chaining and partial probes on
   real text — is the one still open from the pilot, and the only reason to keep this line.
+
+## Run 23 — the summarizer, step 1: what a text is about, from dependent units (2026-11-28, local CPU)
+
+`gramlab/core/summarize.py`. Units are entities (name clusters with surname-by-recency, noun heads, pronouns → most recent
+name or the coreference ranker); dependencies are the linker's records. Three ways to score aboutness, and one learned:
+**freq** (how often the head word occurs), **roles** (Σ role weight × status × position; speech-verb actors demoted as
+sources), **graph** (roles propagated over the event graph), **learned** (logistic regression on per-entity features —
+counts by role, first/early/late presence, spread across sentences, share of mentions, is-name — trained on even documents,
+tested on odd, per genre).
+
+**Title test** (AMALGUM: sentence 1 is the title; hide it, predict the top entity from the body, hit if a content token of
+its name is in the title; 300 docs per genre, gold parses):
+
+| genre | freq | roles | graph | **learned** | top-3: freq / learned |
+|---|---|---|---|---|---|
+| bio | 0.643 | 0.727 | 0.693 | **0.737** | 0.847 / **0.913** |
+| news | 0.513 | 0.443 | 0.433 | **0.543** | 0.760 / **0.783** |
+| voyage | 0.613 | 0.593 | 0.543 | **0.740** | 0.770 / **0.877** |
+| how-to | 0.487 | 0.357 | 0.330 | **0.543** | 0.700 / **0.737** |
+| interview | 0.197 | 0.187 | 0.177 | **0.277** | 0.367 / **0.440** |
+
+Fiction and academic titles rarely name an entity ("Chapter 3", abstract topics) — the test does not apply there.
+
+**Findings.** (1) Grammatical role alone beats counting only in biographies; in news the main actor is usually a *source*
+("officials said") and the topic is the patient of the main event, so fixed role weights lose. (2) The learned scorer
+beats frequency in every genre, by 3–13 points top-1 and 2–11 top-3. Its weights say what aboutness is: **spread**
+(fraction of sentences the entity appears in) dominates, then total mentions and being a name; speech sources are
+negative; actor/patient counts themselves are near zero. Aboutness is *persistence across the discourse* — centering
+theory's continuity — not grammatical prominence. (3) Graph propagation hurts everywhere: it concentrates on hubs.
+
+**On a book** (Austen, *Persuasion*, 24 chapters, live front end + learned linker, 95 s): entities ranked by roles =
+Anne · Sir Walter Elliot · Wentworth · Charles Musgrove · Mary · (Lady) Russell · (Mrs) Smith · Bath · Elizabeth ·
+Harville · Benwick · Lyme — the cast, in a defensible order, with the two main places; frequency ranks *Captain, Mrs,
+Mr, Lady* in its top 8 — the "wrong noun" failure counting was predicted to have. Record skeleton of the book includes
+*Russell → persuade → Anne*, *Wentworth → convince → Anne*, *Charles Musgrove → marry → Anne* (status missed: it was a
+refused proposal), *Anne → dislike → Bath*. Extractive sentence selection by salience picks emotionally dense long
+sentences rather than plot — the skeleton is the usable product; prose needs the writer (step 2, Kaggle: Qwen2.5-1.5B
+reading chapter text + skeleton + registry, verified against the records).
+
+Known weaknesses to fix next: status on refused/failed events, family-name ambiguity beyond recency, the learned scorer's
+position features do not transfer from short Wikipedia-genre documents to novels (use the roles scorer or retrain on
+long texts).
