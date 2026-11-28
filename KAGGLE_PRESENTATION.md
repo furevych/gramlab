@@ -1,9 +1,9 @@
 # The Direction Problem — order‑aware retrieval on a CPU
 
-*gramlab · Taras Furevych · November 2026 · code and every number: github.com/furevych/gramlab (RESULTS.md, runs 0–21)*
+*gramlab — an independent research project by Taras Furevych (Brooklyn, NY) · November 2026 · code and every number: github.com/furevych/gramlab (RESULTS.md, runs 0–21)*
 
 Search engines and neural retrievers score **similarity**, and similarity has no direction: *Apple sued Samsung* and
-*Samsung sued Apple* look the same to them. We measured how badly, and built a 7 MB, CPU‑only verifier that fixes it.
+*Samsung sued Apple* look the same to them. This project measured how badly, and built a 7 MB, CPU‑only verifier that fixes it.
 
 ---
 
@@ -27,7 +27,7 @@ corpus, paraphrased as queries, each paired with its swapped twin inside a 192,2
 
 ---
 
-## 2 · What we built
+## 2 · What gramlab does
 
 `raw text → tagger + lemmatizer (perceptron, no parser) → role linker (hashed logistic, 0.887 F1) → ordered record
 (actor → action → patient) → keys at several levels (name · class · identity · sense) → verified answer`
@@ -94,31 +94,32 @@ production systems make: vectors to **find**, triples (knowledge graphs, fact ch
 
 ---
 
-## 5 · Method and data
+## 5 · How it was done — five steps, each with a number attached
 
-- **Stable core first.** Fixed data contracts, one permanent scoreboard on a gold treebank (GUM), every component
-  replaceable and scored alone. 21 earlier toy‑world notebooks retired and labelled (see *gramlab INDEX*).
-- **Learned where there is a signal.** Linker, typer, coreference and sense picker are small linear models with hashed
-  features; hyper‑parameters chosen on GUM dev; GUM test never used for tuning; SQuAD dev the single external test,
-  never tuned on.
-- **Against real alternatives.** BM25 and a pretrained MiniLM encoder, on a reversal bench built from real sentences and
-  in live‑text mode (tagger + linker, no parser).
-- **Audit and negatives.** Fresh clone, every model retrained, every number reproduced within ±1, two corrections
-  published; hypernym families (87 % wrong), gazetteer (±1 = noise), key‑as‑retriever, soft map ×3, key‑as‑re‑ranker
-  all logged.
+1. **Teach a small model to find the roles.** Take 191,546 sentences from AMALGUM (8 genres: academic, biography,
+   fiction, interview, news, travel, how‑to, forum) that already carry grammatical relations. From those relations
+   derive, for every verb, who is the actor and who is the patient. Train a small linear model (hashed features,
+   logistic regression) to predict that from the words and tags alone — about 10 minutes on a CPU.
+2. **Examine it on gold text it never saw.** GUM, a hand‑annotated treebank, is the exam. Settings are chosen on its
+   *dev* split; its *test* split is touched once per run and never used for tuning. Result: 0.887 F1 with gold tags,
+   0.85 on raw text with the project's own tagger and no parser.
+3. **Turn sentences into records.** Each sentence becomes actor → action → patient, with negated / possible status,
+   filed under keys by name, class, identity and word sense. WordNet 3.0 supplies the senses (every sense kept, with a
+   weight from SemCor frequencies); nothing is learned in this layer.
+4. **Test against the retrievers people actually use.** Two fixed tests, identical for every system: (a) 698 real
+   sentences, each paraphrased as a query and paired with its role‑swapped twin inside 192k sentences — can the system
+   rank the right one first? (b) SQuAD v1.1 dev, 10,570 human‑written questions — can it find the answering sentence?
+   Compared with BM25 and the pretrained MiniLM encoder; SQuAD was never used for tuning.
+5. **Re‑run everything from scratch.** Fresh clone, every model retrained, every number reproduced within ±1, two
+   corrections published. Ideas that failed — hypernym families (87 % wrong), a gazetteer (±1 = noise), the key as a
+   retriever, the soft map in three forms, the key as a blanket re‑ranker — are logged with the same care as the one
+   that worked. 21 earlier toy‑world notebooks were retired and labelled (*gramlab INDEX*).
 
-| Component | Trained on | Evaluated on |
-|---|---|---|
-| Role linker | AMALGUM — 191,546 silver‑parsed sentences, 8 genres (academic, biography, fiction, interview, news, travel, how‑to, forum); roles derived from UD relations | GUM test (gold); 6 further UD treebanks (run 21) |
-| Live front end | 40k AMALGUM sentences, averaged perceptron, 4 epochs | GUM test re‑tagged |
-| Entity typer · coreference | GUM train annotation (+ WordNet features) | GUM test |
-| Sense picker | SemCor | SemCor held‑out |
-| Layer 0 | nothing — WordNet 3.0 frozen, SemCor frequency priors | — |
-| Answer writer | Qwen2.5‑0.5B‑Instruct + LoRA on retrieval dialogues (~2 GPU‑hours, one T4) | manual, perplexity |
-| Not used | web‑text treebank (EWT), hand‑written sentences, anything from a test split | |
-
-Run 21 (*gramlab-more-data*) widens the linker's data beyond Wikipedia‑family text: gold treebanks of legal,
-parliamentary, literary, dialogue and eight further registers, plus Stanza‑parsed Brown, Gutenberg, Reuters, forums and chat.
+**Also trained with the same recipe:** entity typer and coreference ranker on GUM train (+ WordNet features); verb‑sense
+picker on SemCor; the answer writer is Qwen2.5‑0.5B‑Instruct + LoRA on retrieval dialogues (~2 GPU‑hours on one T4).
+**Deliberately not used:** the web‑text treebank (EWT), hand‑written sentences, anything from a test split.
+**Run 21** (*gramlab-more-data*) widens the linker's data beyond Wikipedia‑family text: gold treebanks of legal,
+parliamentary, literary and dialogue registers plus Stanza‑parsed Brown, Gutenberg, Reuters, forums and chat.
 
 ---
 
