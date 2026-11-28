@@ -13,10 +13,10 @@ Search engines and neural retrievers score **similarity**, and similarity has no
 |---|---|
 | Apple sued Samsung over the patents. | Samsung sued Apple over the patents. |
 | The lender must notify the borrower. | The borrower must notify the lender. |
-| Compound A inhibits enzyme B. | Enzyme B inhibits compound A. |
+| The mass compresses the vessel. | The vessel compresses the mass. |
 
 Both halves of each pair are plausible. Same bag of words, same topic, nearly the same vector. In law, finance and
-pharmacology the direction *is* the fact — and a search system that returns the wrong half fails silently.
+clinical notes the direction *is* the fact — and a search system that returns the wrong half fails silently.
 
 **How often each method ranks the correct sentence above its role‑reversed twin** (698 real sentences from an 8‑genre
 corpus, paraphrased as queries, each paired with its swapped twin inside a 192,244‑sentence collection — run 20):
@@ -124,7 +124,11 @@ parliamentary, literary, dialogue and eight further registers, plus Stanza‑par
 
 ## 6 · Who should care, and what is next
 
-- **Search and RAG teams** (contracts, filings, clinical notes, news): demote candidates that share the question's
+- **AI over clinical notes.** "The mass compresses the vessel" vs the reverse; "patient refused the procedure" vs
+  "physician deferred it"; drug A potentiates drug B. Direction errors change care. A verifier that marks negation,
+  modality and who‑acted‑on‑whom raises extraction accuracy and gives a reason a clinician can check — the most
+  direct application of this work.
+- **Search and RAG teams** (contracts, filings, news): demote candidates that share the question's
   parties in the wrong order. A few MB beside the index, no retraining of the big model, a reason you can show an auditor.
 - **Fact‑checking**: claim vs evidence with swapped roles — the silent failure of similarity models; negation and modality
   come with the record.
