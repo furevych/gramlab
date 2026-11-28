@@ -977,3 +977,29 @@ That is the project's final shape: a compact, CPU-only, inspectable **who-did-wh
 ordered key, live front end, layer-0 sense distributions) that makes any retriever order-aware, measured against BM25
 and a pretrained dense encoder on a held-out reversal bench and an external QA set — and a documented negative on every
 attempt to make the structural representation the retriever itself.
+
+## Pilot (recorded late) — encode · calculate · decode on synthetic worlds (Kaggle notebook `gramlab_compositional_meaning_map`, 2026-11-22)
+
+Not in the core series, but the one experiment on the architecture's "calculate over indexes, then recover the specific
+tokens" step, and the measured origin of the "sums impose a fake ordering" diagnosis. Recorded here so it is not lost.
+
+**Setup.** Entities = random unit codes in a shared codebook. A fact *A →r B* in context *c* is stored by adding the outer
+product u(A)u(B)ᵀ to a memory M[c,r]; a class channel H stores A → class(B). A two-step query is *calculated* as
+qᵀM₁M₂ and *decoded* by nearest code in the registry. Baseline: exact table. Control: plain sum of codes, no binding.
+
+**Recovery, gold facts** (% correct: forward · inverse · two-step identity · two-step class):
+
+| facts / relation | d=8 | d=16 | d=32 | d=64 | plain sum, d=64 |
+|---|---|---|---|---|---|
+| 8 | 48·49·24·71 | 97·97·83·84 | 100·100·99·95 | 100·100·100·99 | **14·13·13·43** |
+| 24 | 15·14·5·47 | 66·64·22·58 | 99·99·81·69 | 100·100·(…) | |
+
+Controlled edits (144 pairs): rename / paraphrase / change-context all 144 for the bound memory; **reverse the second
+relation 0/144** — the bound memory cannot tell a reversed relation; verification against stored edges makes it 144/144.
+Class-only joins invent false paths (98 of 371 at 8 facts). With the then-current regex extraction instead of gold facts:
+57·59·35·55 (extraction was the bottleneck). Cost: 8 µs/query vs 0.6 µs for a table; 69 KB vectors + 25 KB codebook vs
+384 bytes of explicit edges for 96 facts.
+
+**Reading.** Role-bound memory recovers specific tokens through a calculation; unbound sums do not (13%). Decoding still
+needs a verification pass for reversed relations, and a table wins on cost at small scale. Never redone with real codes,
+the real linker, real sentences, or proper binding (HRR) — that is run 22. Notebook retagged from ✗ PRIMITIVE to ◐ PILOT.
