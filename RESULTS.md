@@ -1003,3 +1003,57 @@ Class-only joins invent false paths (98 of 371 at 8 facts). With the then-curren
 **Reading.** Role-bound memory recovers specific tokens through a calculation; unbound sums do not (13%). Decoding still
 needs a verification pass for reversed relations, and a table wins on cost at small scale. Never redone with real codes,
 the real linker, real sentences, or proper binding (HRR) — that is run 22. Notebook retagged from ✗ PRIMITIVE to ◐ PILOT.
+
+## Run 22 — encode · calculate · decode, done properly: HRR over real records (2026-11-28, local CPU; Kaggle gramlab-hrr V1 for the public copy)
+
+The pilot's question with a real frame: Plate's Holographic Reduced Representations (`gramlab/core/hrr.py`). Codebook =
+deterministic random unit vector per symbol (layer 0; no storage). Record = ACTOR⊛actor + ACTION⊛action + PATIENT⊛patient
++ STATUS⊛status, ⊛ = circular convolution (FFT). 60,000 records from AMALGUM with gold roles (13,931 distinct fillers),
+head lemmas as fillers. Decoding = unbind a role, nearest codebook vector.
+
+**(1) Capacity — superpose k records in ONE memory, unbind each role, is the record's filler among the top-k cleanups?**
+(ACTOR · ACTION · PATIENT recall@k)
+
+| k | d=512 | d=1024 | d=2048 | d=4096 |
+|---|---|---|---|---|
+| 1 | 1.00 · 1.00 · 1.00 | 1.00 · 1.00 · 1.00 | 1.00 · 1.00 · 1.00 | 1.00 · 1.00 · 1.00 |
+| 4 | .69 · .71 · .70 | .97 · .96 · .96 | 1.00 · 1.00 · 1.00 | 1.00 · 1.00 · 1.00 |
+| 16 | .17 · .11 · .06 | .32 · .16 · .12 | .51 · .33 · .37 | .79 · .71 · .67 |
+| 64 | .13 · .07 · .02 | .28 · .06 · .02 | .36 · .12 · .09 | .52 · .24 · .13 |
+| 256 | .18 · .09 · .04 | .34 · .08 · .03 | — | .51 · .21 · .11 |
+
+A single calculable memory holds about **d/1000 records cleanly** (4 at 2048, ~8 at 4096) before specific tokens stop
+coming back; ACTION degrades fastest because verbs repeat (say, make, take). This is the textbook HRR capacity bound with
+a 14k-symbol codebook, now measured on our own records. It is the price of "calculating over a sum".
+
+**(2) Reversal — record vs its role-swapped twin.** cosine(record, twin) 0.48–0.50 (they share ACTION and STATUS terms);
+ACTOR decoded from the twin = the twin's actor **100.0 %** at every d; minimum margin right-minus-wrong 0.28 (d=512) →
+0.36 (d=4096). Order lives in the binding; nothing is learned and nothing is looked up.
+
+**(3) Questions — "who V-ed X?" over a stored collection of 20,000 record vectors** (probe = ACTION⊛V + PATIENT⊛X, best
+record by cosine, unbind ACTOR), 1,000 questions, against the exact key's first posting on the same questions:
+
+| d | HRR top-1 actor | key first posting | µs / question (HRR) |
+|---|---|---|---|
+| 512 | 0.785 | 0.788 | 2,800 |
+| 1024 | 0.785 | 0.788 | 8,700 |
+| 2048 | 0.778 | 0.788 | 19,000 |
+| 4096 | 0.777 | 0.788 | 38,000 |
+
+352 of the 1,000 questions have several exact (verb, patient) matches in the collection; both systems can only guess
+there, which is where all the misses are. HRR equals the key when each record keeps its own vector — at 2–4 KB per
+record and milliseconds per question against the key's few bytes and microseconds.
+
+**(4) Live conditions.** Records from the learned linker on front-end tags agree with gold records 64.5 % of the time
+(6,309 of 9,780 on 20k sentences) — the extraction ceiling, unchanged from run 11, applies to every representation alike.
+
+**What this settles about the architecture.**
+- "Calculate over the indexes and recover the specific tokens" **works, exactly as the theory says, and only at very
+  small scale**: one record, a clause, at most a short paragraph per memory. The Nov-22 pilot's numbers were right in
+  shape; with proper binding the reversal failure it had (0/144) disappears (100 %).
+- For *finding* records in a collection, a vector per record is needed anyway, and then HRR ties the key at ~1000× the
+  cost. The key is the right store; HRR is a representation for *composition within a small context*, not an index.
+- What HRR gives that the key cannot: graded partial matches (a probe missing a slot still ranks), algebra on records
+  (binding a time or place slot in later without re-indexing), and reversal detection with no lookup at all. None of
+  that has been shown to answer a question the key cannot; that experiment — two-step chaining and partial probes on
+  real text — is the one still open from the pilot, and the only reason to keep this line.
